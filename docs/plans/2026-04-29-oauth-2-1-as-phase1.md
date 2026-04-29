@@ -319,7 +319,7 @@ OAUTH_ENCRYPTION_KEY=def00000…paste-actual-output-here…
 ###< oauth ###
 ```
 
-`base64_encode(random_bytes(32))` does **not** work — the format is `defuse/php-encryption` specific.
+`league/oauth2-server` v9 accepts both the `defuse/php-encryption` format (recommended, what `vendor/bin/generate-defuse-key` produces) and a raw random string. We use the defuse format for parity with future production setups.
 
 **Step 4: Restart the stack so the env reaches PHP**
 
@@ -498,6 +498,62 @@ Expected: 1 test, 1 assertion, OK.
 git add tests/SmokeTest.php .env.test phpunit.xml.dist README.md
 git commit -m "$(cat <<'EOF'
 test: add WebTestCase smoke test + .env.test for separate test DB
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task A7.5: Generate test-only RSA keypair fixtures
+
+**Why:** Tasks C3a (KidDeriver) and C3b (McpAccessTokenEntity) read `tests/fixtures/public.key` / `private.key`. Without these committed, the tests `markTestSkipped` and ship green by accident. We commit a **test-only** keypair so the suite is deterministic and hermetic. These keys are never used for issuing real tokens.
+
+**Files:**
+- Create: `tests/fixtures/private.key` (committed)
+- Create: `tests/fixtures/public.key` (committed)
+- Create: `tests/fixtures/README.md` (explains the keys are test-only)
+
+**Step 1: Generate**
+
+```bash
+mkdir -p tests/fixtures
+openssl genrsa -out tests/fixtures/private.key 2048
+openssl rsa -in tests/fixtures/private.key -pubout -out tests/fixtures/public.key
+chmod 600 tests/fixtures/private.key
+```
+
+2048 bits is fine for tests — fast, and the `.gitignore` rule `/config/jwt/*.key` does not match `tests/fixtures/*.key`.
+
+**Step 2: Document**
+
+Create `tests/fixtures/README.md`:
+
+```markdown
+# Test fixtures — RSA keypair
+
+`private.key` and `public.key` are committed RSA keys used **only** by
+the unit/functional test suite. They MUST NOT be used to sign real
+tokens; production keys live under `config/jwt/` and are gitignored.
+
+If you regenerate these, run any test once afterwards and update any
+hard-coded `kid` expectations.
+```
+
+**Step 3: Verify the gitignore does not match**
+
+Run: `git check-ignore -v tests/fixtures/private.key`
+Expected: no output (= file is NOT ignored).
+
+**Step 4: Commit**
+
+```bash
+git add tests/fixtures/private.key tests/fixtures/public.key tests/fixtures/README.md
+git commit -m "$(cat <<'EOF'
+test: add committed test-only RSA keypair fixtures
+
+Used by KidDeriverTest and McpAccessTokenEntityTest. NOT for production.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1930,7 +1986,10 @@ Same TDD shape. Output:
 }
 ```
 
-**Important assertion in tests:** `authorization_servers[0]` is byte-equal to the issuer string (no trim, no normalization).
+**Required assertions in tests:**
+- `authorization_servers[0]` is byte-equal to the issuer string (no trim, no normalization).
+- `assertSame(['header'], $meta['bearer_methods_supported'])` — strict equality, must be exactly `["header"]` (no `query`, no `body`).
+- `resource` and `scopes_supported` are present and match expected.
 
 **Commit:** `feat: add ProtectedResourceMetadataBuilder (RFC 9728)`
 
@@ -2052,6 +2111,7 @@ final class McpAccessTokenEntityTest extends TestCase
         $token = new McpAccessTokenEntity(
             'http://localhost:8000',
             new \App\OAuth\Extension\KidDeriver($publicPath),
+            $publicPath,
         );
         $token->setIdentifier('jti-1');
         $token->setExpiryDateTime(new \DateTimeImmutable('+1 hour'));
@@ -2110,6 +2170,7 @@ final class McpAccessTokenEntity implements AccessTokenEntityInterface
     public function __construct(
         private readonly string $issuer,
         private readonly KidDeriver $kidDeriver,
+        private readonly string $publicKeyPath,
     ) {}
 
     // --- AccessTokenEntityInterface ---
@@ -2136,13 +2197,12 @@ final class McpAccessTokenEntity implements AccessTokenEntityInterface
 
     public function __toString(): string
     {
-        // For asymmetric signing the verification key isn't actually used, but lcobucci/jwt v5
-        // demands it be a non-empty Key instance — pass the same private key for both slots.
         $signingKey = InMemory::file(
             $this->privateKey->getKeyPath(),
             $this->privateKey->getPassPhrase() ?? '',
         );
-        $config = Configuration::forAsymmetricSigner(new Sha256(), $signingKey, $signingKey);
+        $verificationKey = InMemory::file($this->publicKeyPath);
+        $config = Configuration::forAsymmetricSigner(new Sha256(), $signingKey, $verificationKey);
 
         $now = new DateTimeImmutable();
         $builder = $config->builder()
@@ -2204,7 +2264,7 @@ Add test: `getNewToken()` returns an `McpAccessTokenEntity` with the configured 
 
 Implementation:
 - Extend `League\OAuth2\Server\Grant\AuthorizationCodeGrant`.
-- **PKCE enforcement.** league v9 calls `validateAuthorizationRequest()` from `respondToAuthorizationRequest()`; the public surface stable across v9 minors is `respondToAuthorizationRequest()`. Before calling `parent::respondToAuthorizationRequest()`, inspect the `ServerRequestInterface` for `code_challenge`. Missing → `OAuthServerException::invalidRequest('code_challenge', 'PKCE required')`. Wrong method (`code_challenge_method !== 'S256'`) → same. Add a unit test that grep-confirms the override location by class name (`(new ReflectionClass(ResourceIndicatorGrant::class))->hasMethod('respondToAuthorizationRequest')`) — this catches refactors in upstream that move the hook.
+- **PKCE enforcement.** Override `validateAuthorizationRequest($request)`. Read `code_challenge` and `code_challenge_method` via `$this->getQueryStringParameter(...)`. Missing `code_challenge` → `OAuthServerException::invalidRequest('code_challenge', 'PKCE required')`. `code_challenge_method` not `'S256'` → same exception. After the checks, return `parent::validateAuthorizationRequest($request)` so the rest of the league pipeline runs unchanged. (`enableCodeExchangeProof()` enables PKCE *support* but does not reject missing PKCE for confidential clients in v9; this override closes that gap.)
 - **Resource validation + aud injection.** Override `respondToAccessTokenRequest()`:
   1. Read `resource` via `$this->getRequestParameter('resource', $request)`.
   2. If null → `OAuthServerException::invalidTarget('resource is required')`.
@@ -2445,7 +2505,7 @@ Functional tests:
 
 **Files:**
 - Modify: `config/packages/security.yaml` — InMemoryUserProvider with one user `alice`, `form_login` firewall covering `/oauth/authorize` and `/oauth/consent`.
-- Create: `src/Controller/SecurityController.php` — `#[Route('/login')]` returning the login form.
+- Create: `src/Controller/SecurityController.php` — `#[Route('/login', name: 'app_login')]` and `#[Route('/logout', name: 'app_logout')]`. The route names must match the `login_path`/`logout.path` strings in `security.yaml` below.
 - Create: `templates/security/login.html.twig`.
 - Create: `tests/Controller/SecurityControllerTest.php` — GET `/login` 200, POST with valid creds → 302 to `/`, with invalid creds → 422 + error.
 
