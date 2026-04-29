@@ -2270,7 +2270,11 @@ Implementation:
   2. If null → `OAuthServerException::invalidTarget('resource is required')`.
   3. If scheme is not `https://` and not `http://localhost...` → `invalidTarget('resource scheme must be https')`.
   4. If `! $this->allowedResources->contains($resource)` → `invalidTarget('resource not allowed')`.
-  5. Call parent for the access-token issuance path; the parent fills `$accessToken` via `AccessTokenRepository::getNewToken()` (Phase C4 returns `McpAccessTokenEntity`). Capture the entity before the response is finalized via the league protected hook `issueAccessToken()` — override it to call `$accessToken->setAudiences([$resource])` then delegate to parent. Test that the JWT in the final response has `aud === [$resource]`.
+  5. **Stash on the grant**: `$this->pendingResource = $resource;` so the value reaches the protected `issueAccessToken()` hook (steps 6-7). Without this property, `issueAccessToken()` has no way to see the validated resource.
+  6. Call parent for the access-token issuance path; the parent fills `$accessToken` via `AccessTokenRepository::getNewToken()` (Phase C4 returns `McpAccessTokenEntity`).
+  7. Override `issueAccessToken()` (`AbstractGrant::issueAccessToken()` is `protected`) to call `$accessToken->setAudiences([$this->pendingResource])` before delegating to parent. Test that the JWT in the final response has `aud === [$resource]`.
+
+**Note (deferred to Phase 2):** RFC 8707 §2.2 requires the `resource` value at the token endpoint to match what the client sent at the authorize endpoint. Phase 1 has a single allowed resource so the constraint is satisfied implicitly; once `MCP_ALLOWED_RESOURCES` grows beyond one entry, add a check that `oauth_auth_codes.resource === $resource` in the token request.
 
 **Commit:** `feat: add ResourceIndicatorGrant enforcing PKCE + RFC 8707`
 
@@ -2486,8 +2490,9 @@ In the controller:
 ```php
 $limit = $this->dcrLimiter->create($request->getClientIp() ?? 'anon')->consume(1);
 if (!$limit->isAccepted()) {
+    $retryAfter = max(0, $limit->getRetryAfter()->getTimestamp() - time());
     return new JsonResponse(['error' => 'too_many_requests'], 429, [
-        'Retry-After' => (string) $limit->getRetryAfter()->getTimestamp() - time(),
+        'Retry-After' => (string) $retryAfter,
     ]);
 }
 ```
