@@ -19,5 +19,33 @@ services:
     App\:
         resource: '../src/'
 
+    # ScopeRepository takes a scope-id => description array; not autowireable.
+    App\OAuth\Repository\ScopeRepository:
+        arguments:
+            $scopes:
+                mcp: 'MCP access'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+
+when@test:
+    services:
+        _defaults:
+            autowire: true
+            autoconfigure: true
+            public: true
+
+        # Expose OAuth repos/extensions to test containers so kernel-backed
+        # tests can pull them via self::getContainer()->get(...) before any
+        # controller (Phase D) references them.
+        App\OAuth\Repository\:
+            resource: '../src/OAuth/Repository/'
+        App\OAuth\Extension\:
+            resource: '../src/OAuth/Extension/'
+
+        # Re-apply the explicit array argument that the resource pattern
+        # above would otherwise blow away.
+        App\OAuth\Repository\ScopeRepository:
+            arguments:
+                $scopes:
+                    mcp: 'MCP access'
