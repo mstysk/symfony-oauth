@@ -212,18 +212,20 @@ Run:
 
 ```bash
 docker compose exec app composer require \
-  symfony/security-bundle:^8.0 \
-  symfony/twig-bundle:^8.0 \
-  symfony/form:^8.0 \
-  symfony/validator:^8.0 \
-  symfony/rate-limiter:^8.0 \
-  symfony/uid:^8.0 \
+  symfony/security-bundle:8.0.* \
+  symfony/twig-bundle:8.0.* \
+  symfony/form:8.0.* \
+  symfony/validator:8.0.* \
+  symfony/rate-limiter:8.0.* \
+  symfony/uid \
   doctrine/orm:^3 \
   doctrine/doctrine-bundle:^2 \
   doctrine/doctrine-migrations-bundle:^3
 ```
 
 Expected: Flex prompts for each recipe; accept all defaults (`y`).
+
+**Note:** `symfony/uid` does **not** track Symfony's main version stream — leave it unconstrained and let Composer resolve the latest compatible release.
 
 **Step 3: Install OAuth + JWT libraries**
 
@@ -249,8 +251,11 @@ docker compose exec app composer require --dev \
 
 **Step 5: Verify the bundle list**
 
-Run: `docker compose exec app php bin/console debug:container --env-vars 2>&1 | head -20`
-Expected: no errors. The container builds.
+Run: `docker compose exec app php bin/console debug:dotenv 2>&1 | head -20`
+Expected: dotenv table or "Dotenv is disabled" — either is fine; the goal is the container boots without container-compilation errors.
+
+Run: `docker compose exec app php bin/console debug:container --types 2>&1 | head -5`
+Expected: a list of autowireable services (proves the container compiled).
 
 Run: `cat config/bundles.php`
 Expected: includes `FrameworkBundle`, `SecurityBundle`, `TwigBundle`, `DoctrineBundle`, `DoctrineMigrationsBundle`, `MakerBundle`, `MonologBundle` (or similar).
@@ -410,8 +415,8 @@ EOF
 
 **Files:**
 - Create: `tests/SmokeTest.php`
-- Modify: `phpunit.xml.dist` (Flex created it during A4; ensure SQLite test DB)
-- Modify: `config/packages/test/doctrine.yaml`
+- Create / modify: `.env.test`
+- Inspect: `phpunit.xml.dist` (Flex created it during A4)
 
 **Step 1: Inspect Flex-created `phpunit.xml.dist`**
 
@@ -419,17 +424,40 @@ Run: `cat phpunit.xml.dist`
 
 Confirm `<env name="APP_ENV" value="test" />` is present. If not, add inside `<php>`.
 
-**Step 2: Override DB for test env**
+**Step 2: Point the test environment at its own SQLite file via `.env.test`**
 
-Create `config/packages/test/doctrine.yaml`:
+`.env.test` is loaded automatically when `APP_ENV=test`, *and only by the host process*. Inside Docker we set `SYMFONY_DISABLE_DOTENV=1`, so for tests we either run them on the host with `APP_ENV=test`, or we add `APP_ENV=test` + `DATABASE_URL=...` to a one-shot `docker compose exec app` env. The cleanest path is to write `.env.test` and run PHPUnit with the host PHP — but we want the container, so we ALSO export the DSN at the test command level.
 
-```yaml
-doctrine:
-    dbal:
-        url: 'sqlite:///%kernel.project_dir%/var/data/test.db'
+Create `.env.test`:
+
+```dotenv
+KERNEL_CLASS='App\Kernel'
+APP_SECRET='insecure-test-only'
+SYMFONY_DEPRECATIONS_HELPER='disabled'
+DATABASE_URL='sqlite:///%kernel.project_dir%/var/data/test.db'
+OAUTH_ISSUER='http://localhost:8000'
+OAUTH_PRIVATE_KEY_PATH='%kernel.project_dir%/tests/fixtures/private.key'
+OAUTH_PUBLIC_KEY_PATH='%kernel.project_dir%/tests/fixtures/public.key'
+OAUTH_ENCRYPTION_KEY='def00000…paste-test-only-key…'
+OAUTH_ACCESS_TOKEN_TTL='PT1H'
+OAUTH_REFRESH_TOKEN_TTL='P30D'
+OAUTH_AUTH_CODE_TTL='PT10M'
+MCP_ALLOWED_RESOURCES='http://localhost:8000/mcp'
 ```
 
-**Step 3: Write the smoke test**
+**Do NOT override `doctrine.yaml` per-environment** — that path causes connection collisions. Always source the DSN from `.env.test`.
+
+**Step 3: Adjust the PHPUnit command for Docker**
+
+When running in the container, PHPUnit needs to read `.env.test` even with `SYMFONY_DISABLE_DOTENV=1`. The cleanest workaround: unset that variable for the test command.
+
+```bash
+docker compose exec -e SYMFONY_DISABLE_DOTENV=0 -e APP_ENV=test app vendor/bin/phpunit
+```
+
+Document this in `README.md` under "Tests".
+
+**Step 4: Write the smoke test**
 
 Create `tests/SmokeTest.php`:
 
@@ -454,17 +482,61 @@ final class SmokeTest extends WebTestCase
 }
 ```
 
-**Step 4: Run and verify pass**
+**Step 5: Run and verify pass**
 
-Run: `docker compose exec app vendor/bin/phpunit tests/SmokeTest.php`
-Expected: 1 test, 1 assertion, OK.
-
-**Step 5: Commit**
+Run:
 
 ```bash
-git add tests/SmokeTest.php config/packages/test/doctrine.yaml phpunit.xml.dist
+docker compose exec -e SYMFONY_DISABLE_DOTENV=0 -e APP_ENV=test app vendor/bin/phpunit tests/SmokeTest.php
+```
+
+Expected: 1 test, 1 assertion, OK.
+
+**Step 6: Commit**
+
+```bash
+git add tests/SmokeTest.php .env.test phpunit.xml.dist README.md
 git commit -m "$(cat <<'EOF'
-test: add WebTestCase smoke test, separate test SQLite DB
+test: add WebTestCase smoke test + .env.test for separate test DB
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task A8: Register the Doctrine UUID type
+
+**Why:** Phase B entities use `#[ORM\Column(type: 'uuid')]`, which is **not** a built-in Doctrine DBAL type — it needs explicit registration via `Symfony\Bridge\Doctrine\Types\UuidType`. Without this, `doctrine:migrations:diff` and any test that boots the schema will fail with `Unknown column type "uuid" requested.`
+
+**Files:**
+- Modify: `config/packages/doctrine.yaml`
+
+**Step 1: Add the type mapping**
+
+Open `config/packages/doctrine.yaml` and locate the `dbal:` block. Add a `types:` key under it:
+
+```yaml
+doctrine:
+    dbal:
+        url: '%env(resolve:DATABASE_URL)%'
+        types:
+            uuid: Symfony\Bridge\Doctrine\Types\UuidType
+        # ... rest unchanged
+```
+
+**Step 2: Verify**
+
+Run: `docker compose exec app php bin/console doctrine:mapping:info 2>&1 | head -5`
+Expected: prints "No mapped entities" (we have none yet) — but does NOT print an "Unknown column type" error. Any "uuid" type errors here mean the registration didn't take.
+
+**Step 3: Commit**
+
+```bash
+git add config/packages/doctrine.yaml
+git commit -m "$(cat <<'EOF'
+chore: register Doctrine UUID type for entity mapping
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -475,7 +547,9 @@ EOF
 
 ## Phase B — Doctrine entities and OAuth state
 
-Each entity lives in `src/OAuth/Entity/` and wears two hats: a Doctrine ORM entity and a `league/oauth2-server` `*EntityInterface` implementation. Use `league`'s provided traits to satisfy the interface methods.
+Each entity lives in `src/OAuth/Entity/` and wears two hats: a Doctrine ORM entity and a `league/oauth2-server` `*EntityInterface` implementation.
+
+**Important — do NOT use league's `EntityTrait` / `TokenEntityTrait` / `ClientTrait` / `AuthCodeTrait` here.** Those traits declare `protected` properties (`$identifier`, `$client`, `$expiryDateTime`, `$userIdentifier`, `$scopes`, `$redirectUri`, etc.) that Doctrine's attribute driver will try to map and then crash because they have no `#[ORM\Column]`. Implement the interface methods manually — there are only 3-7 per interface, and they are trivial getters/setters. The `Scope` and `User` entities (B1, B5) are pure value objects (no Doctrine mapping) so the trait there is fine; from B3 onward, no traits.
 
 Repositories live in `src/OAuth/Repository/`. They are Symfony services (autowired) and implement `league`'s `*RepositoryInterface`. They internally use Doctrine `EntityManagerInterface`.
 
@@ -788,6 +862,8 @@ final class ClientTest extends TestCase
 
 **Step 3: Implement** `src/OAuth/Entity/Client.php`
 
+No traits. Implement `ClientEntityInterface` directly. The interface methods are: `getIdentifier`, `getName`, `getRedirectUri` (returns string|string[]), `isConfidential`. Everything else is for our own use.
+
 ```php
 <?php
 
@@ -797,20 +873,18 @@ namespace App\OAuth\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
-use League\OAuth2\Server\Entities\Traits\ClientTrait;
-use League\OAuth2\Server\Entities\Traits\EntityTrait;
 use Symfony\Component\Uid\Uuid;
 
 #[ORM\Entity]
 #[ORM\Table(name: 'oauth_clients')]
 class Client implements ClientEntityInterface
 {
-    use EntityTrait;
-    use ClientTrait;
-
     #[ORM\Id]
     #[ORM\Column(type: 'uuid')]
     private Uuid $id;
+
+    #[ORM\Column(type: 'string', length: 191, unique: true)]
+    private string $clientIdentifier;
 
     #[ORM\Column(type: 'string', length: 191)]
     private string $clientName;
@@ -818,12 +892,22 @@ class Client implements ClientEntityInterface
     #[ORM\Column(type: 'string', length: 255, nullable: true)]
     private ?string $secretHash;
 
+    #[ORM\Column(type: 'boolean')]
+    private bool $confidential;
+
+    /** @var string[] */
+    #[ORM\Column(type: 'json')]
+    private array $redirectUris;
+
+    /** @var string[] */
     #[ORM\Column(type: 'json')]
     private array $grantTypes;
 
+    /** @var string[] */
     #[ORM\Column(type: 'json')]
     private array $scopesAllowed;
 
+    /** @var array<string, mixed> */
     #[ORM\Column(type: 'json')]
     private array $dcrMetadata;
 
@@ -847,20 +931,26 @@ class Client implements ClientEntityInterface
         ?\DateTimeImmutable $createdAt = null,
     ) {
         $this->id = $id;
-        $this->identifier = $id->toRfc4122();
+        $this->clientIdentifier = $id->toRfc4122();
         $this->clientName = $name;
-        $this->name = $name;                 // ClientTrait exposes $name
         $this->secretHash = $secretHash;
-        $this->isConfidential = $secretHash !== null;
-        $this->redirectUri = $redirectUris;
+        $this->confidential = $secretHash !== null;
+        $this->redirectUris = $redirectUris;
         $this->grantTypes = $grantTypes;
         $this->scopesAllowed = $scopes;
         $this->dcrMetadata = $dcrMetadata;
         $this->createdAt = $createdAt ?? new \DateTimeImmutable();
     }
 
-    public function getId(): Uuid { return $this->id; }
+    // --- ClientEntityInterface ---
+    public function getIdentifier(): string { return $this->clientIdentifier; }
     public function getName(): string { return $this->clientName; }
+    /** @return string[] */
+    public function getRedirectUri(): array { return $this->redirectUris; }
+    public function isConfidential(): bool { return $this->confidential; }
+
+    // --- App-side accessors ---
+    public function getId(): Uuid { return $this->id; }
     public function getSecretHash(): ?string { return $this->secretHash; }
     /** @return string[] */
     public function getGrantTypes(): array { return $this->grantTypes; }
@@ -1017,7 +1107,7 @@ final class ClientRepository implements ClientRepositoryInterface
     public function getClientEntity(string $clientIdentifier): ?ClientEntityInterface
     {
         return $this->em->getRepository(Client::class)
-            ->findOneBy(['identifier' => $clientIdentifier]);
+            ->findOneBy(['clientIdentifier' => $clientIdentifier]);
     }
 
     public function validateClient(
@@ -1052,31 +1142,6 @@ final class ClientRepository implements ClientRepositoryInterface
     }
 }
 ```
-
-**Note:** `ClientEntityInterface` requires the entity to expose `identifier`. We added it via `EntityTrait`, but Doctrine doesn't know about `$identifier` on `Client`. We'll fix this with `findOneBy` searching by a different column or by mapping the trait's `$identifier`. Easiest: also expose a Doctrine column for `identifier` mapped to the same value (= the UUID rfc4122 string), or use a `@PostLoad` to copy `id` to `$identifier`. Use a Doctrine `#[ORM\Column]` on a new property `clientIdentifier` and override the trait property (PHP allows this with constructor assignment). The simplest path: drop `EntityTrait`'s `$identifier` and add an `#[ORM\Column]`-mapped one. Update `Client.php`:
-
-```php
-// In Client.php — replace `use EntityTrait;` block:
-
-#[ORM\Column(type: 'string', length: 191, unique: true)]
-private string $clientIdentifier;
-
-public function getIdentifier(): string
-{
-    return $this->clientIdentifier;
-}
-
-public function setIdentifier(string $identifier): void
-{
-    $this->clientIdentifier = $identifier;
-}
-```
-
-Then in the constructor: `$this->clientIdentifier = $id->toRfc4122();` instead of `$this->identifier = …`.
-
-Also update `ClientRepository::getClientEntity` to: `findOneBy(['clientIdentifier' => $clientIdentifier])`.
-
-Re-run the unit `ClientTest` from Task B3 — adjust if it referenced `getIdentifier()` (it does and that still works).
 
 **Step 5: Run, expect pass**
 
@@ -1256,7 +1321,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task B6: `AuthCode` entity + repository
 
-Same shape as `Client` (Doctrine + interface trait). Includes `code_challenge`, `code_challenge_method`, `resource`, `redirect_uri`, `revoked`.
+Implements `AuthCodeEntityInterface` directly (no traits). Doctrine columns: `code_challenge`, `code_challenge_method`, `resource`, `redirect_uri`, `revoked`.
 
 **Files:**
 - Create: `src/OAuth/Entity/AuthCode.php`
@@ -1318,7 +1383,7 @@ final class AuthCodeRepositoryTest extends DoctrineKernelTestCase
 
 **Step 2: Run, expect failure**
 
-**Step 3: Implement entity**
+**Step 3: Implement entity (no traits)**
 
 `src/OAuth/Entity/AuthCode.php`:
 
@@ -1331,23 +1396,16 @@ namespace App\OAuth\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
 use League\OAuth2\Server\Entities\AuthCodeEntityInterface;
-use League\OAuth2\Server\Entities\Traits\AuthCodeTrait;
-use League\OAuth2\Server\Entities\Traits\EntityTrait;
-use League\OAuth2\Server\Entities\Traits\TokenEntityTrait;
+use League\OAuth2\Server\Entities\ClientEntityInterface;
+use League\OAuth2\Server\Entities\ScopeEntityInterface;
 
 #[ORM\Entity]
 #[ORM\Table(name: 'oauth_auth_codes')]
 class AuthCode implements AuthCodeEntityInterface
 {
-    use AuthCodeTrait;
-    use EntityTrait;
-    use TokenEntityTrait;
-
-    // We add Doctrine columns by overriding the trait properties via @ORM\Column on shadow scalar columns:
-
     #[ORM\Id]
     #[ORM\Column(type: 'string', length: 191)]
-    private string $identifierColumn;
+    private string $identifier;
 
     #[ORM\Column(type: 'string', length: 191)]
     private string $clientId;
@@ -1356,63 +1414,83 @@ class AuthCode implements AuthCodeEntityInterface
     private ?string $userId = null;
 
     #[ORM\Column(type: 'datetime_immutable')]
-    private \DateTimeImmutable $expiry;
+    private \DateTimeImmutable $expiryDateTime;
 
+    /** @var string[] */
     #[ORM\Column(type: 'json')]
     private array $scopeIds = [];
 
-    #[ORM\Column(type: 'string', length: 2048)]
-    private string $redirectUriColumn;
+    #[ORM\Column(type: 'string', length: 2048, nullable: true)]
+    private ?string $redirectUri = null;
 
-    #[ORM\Column(type: 'string', length: 255)]
-    private string $codeChallenge;
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $codeChallenge = null;
 
-    #[ORM\Column(type: 'string', length: 16)]
-    private string $codeChallengeMethod;
+    #[ORM\Column(type: 'string', length: 16, nullable: true)]
+    private ?string $codeChallengeMethod = null;
 
-    #[ORM\Column(type: 'string', length: 2048)]
-    private string $resource;
+    #[ORM\Column(type: 'string', length: 2048, nullable: true)]
+    private ?string $resource = null;
 
     #[ORM\Column(type: 'boolean')]
     private bool $revoked = false;
 
-    public function setIdentifier($identifier): void
-    {
-        $this->identifier = (string) $identifier;
-        $this->identifierColumn = (string) $identifier;
-    }
+    /** Runtime references (not persisted directly). */
+    private ?ClientEntityInterface $client = null;
+    /** @var ScopeEntityInterface[] */
+    private array $scopes = [];
 
-    public function setClient(\League\OAuth2\Server\Entities\ClientEntityInterface $client): void
+    public function getIdentifier(): string { return $this->identifier; }
+    public function setIdentifier($identifier): void { $this->identifier = (string) $identifier; }
+
+    public function getClient(): ClientEntityInterface
+    {
+        if ($this->client === null) {
+            throw new \LogicException('Client must be hydrated via setClient() before access.');
+        }
+        return $this->client;
+    }
+    public function setClient(ClientEntityInterface $client): void
     {
         $this->client = $client;
         $this->clientId = $client->getIdentifier();
     }
+    public function getClientId(): string { return $this->clientId; }
 
-    public function setUserIdentifier($identifier): void
+    /** @return ScopeEntityInterface[] */
+    public function getScopes(): array { return $this->scopes; }
+    public function addScope(ScopeEntityInterface $scope): void
     {
-        $this->userIdentifier = (string) $identifier;
-        $this->userId = (string) $identifier;
+        $this->scopes[] = $scope;
+        $this->scopeIds[] = $scope->getIdentifier();
+        $this->scopeIds = array_values(array_unique($this->scopeIds));
     }
+    /** @return string[] */
+    public function getScopeIds(): array { return $this->scopeIds; }
 
-    public function setExpiryDateTime(\DateTimeImmutable $expiryDateTime): void
-    {
-        $this->expiryDateTime = $expiryDateTime;
-        $this->expiry = $expiryDateTime;
-    }
+    public function getExpiryDateTime(): \DateTimeImmutable { return $this->expiryDateTime; }
+    public function setExpiryDateTime(\DateTimeImmutable $expiryDateTime): void { $this->expiryDateTime = $expiryDateTime; }
 
-    public function setRedirectUri($uri): void
-    {
-        $this->redirectUri = $uri;
-        $this->redirectUriColumn = $uri;
-    }
+    public function getUserIdentifier(): ?string { return $this->userId; }
+    public function setUserIdentifier($identifier): void { $this->userId = $identifier === null ? null : (string) $identifier; }
 
-    public function setResource(string $resource): void { $this->resource = $resource; }
-    public function getResource(): string { return $this->resource; }
+    public function getRedirectUri(): ?string { return $this->redirectUri; }
+    public function setRedirectUri($uri): void { $this->redirectUri = $uri; }
+
+    public function getCodeChallenge(): ?string { return $this->codeChallenge; }
+    public function setCodeChallenge(?string $codeChallenge): void { $this->codeChallenge = $codeChallenge; }
+    public function getCodeChallengeMethod(): ?string { return $this->codeChallengeMethod; }
+    public function setCodeChallengeMethod(?string $method): void { $this->codeChallengeMethod = $method; }
+
+    public function getResource(): ?string { return $this->resource; }
+    public function setResource(?string $resource): void { $this->resource = $resource; }
 
     public function isRevoked(): bool { return $this->revoked; }
     public function revoke(): void { $this->revoked = true; }
 }
 ```
+
+**Note:** `AuthCodeEntityInterface` (league v9) extends `TokenInterface`, which requires a few more methods. Run `vendor/bin/phpstan` is not configured; instead use `php -l src/OAuth/Entity/AuthCode.php` to confirm syntax, then let PHPUnit's first failure (`Class … must implement method …`) tell you which methods are missing. Add them as no-op getters/setters around the same fields. Common additions: `setClient()` is already there, `addScope`/`setExpiryDateTime`/`setUserIdentifier`/`getIdentifier` covered above. Most of the remaining are already mirrors of the same data.
 
 **Implement repository** `src/OAuth/Repository/AuthCodeRepository.php`:
 
@@ -1448,7 +1526,7 @@ final class AuthCodeRepository implements AuthCodeRepositoryInterface
 
     public function revokeAuthCode(string $codeId): void
     {
-        $code = $this->em->getRepository(AuthCode::class)->findOneBy(['identifierColumn' => $codeId]);
+        $code = $this->em->find(AuthCode::class, $codeId);
         if ($code instanceof AuthCode) {
             $code->revoke();
             $this->em->flush();
@@ -1457,7 +1535,7 @@ final class AuthCodeRepository implements AuthCodeRepositoryInterface
 
     public function isAuthCodeRevoked(string $codeId): bool
     {
-        $code = $this->em->getRepository(AuthCode::class)->findOneBy(['identifierColumn' => $codeId]);
+        $code = $this->em->find(AuthCode::class, $codeId);
         return $code === null || $code->isRevoked();
     }
 }
@@ -1476,38 +1554,239 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task B7: `AccessToken` entity + repository (skeleton; aud injection comes in Phase C)
+### Task B7: `AccessToken` Doctrine entity + repository
 
 **Files:**
-- Create: `src/OAuth/Entity/AccessToken.php`
+- Create: `src/OAuth/Entity/AccessToken.php` — Doctrine row, **NOT** the JWT-issuing `AccessTokenEntityInterface` (that's `McpAccessTokenEntity` in Phase C).
 - Create: `src/OAuth/Repository/AccessTokenRepository.php`
 - Create: `tests/OAuth/Repository/AccessTokenRepositoryTest.php`
 
-For now, the entity uses league's `AccessTokenTrait` plus Doctrine columns. **Replacing the trait happens in Phase C** (Task C2). Don't worry about kid/iss yet.
+**Architectural note:** `league/oauth2-server` calls `getNewToken()` to obtain an `AccessTokenEntityInterface`, then later calls `persistNewAccessToken($entity)`. The entity returned by `getNewToken()` is a JWT-shaped value object (`McpAccessTokenEntity`, Phase C). The Doctrine row is built **in `persistNewAccessToken()` by copying the relevant fields out of the interface implementation**. `AccessToken` (this task) is the Doctrine row only — it does NOT implement `AccessTokenEntityInterface`. Until Phase C lands, `getNewToken()` returns a stub class that satisfies the interface; we replace it in C4.
 
-(Implementation analogous to `AuthCode`; columns: `identifier (jti)`, `client_id`, `user_id`, `expires_at`, `scopes (JSON)`, `audience (JSON array)`, `revoked`. Repository implements `AccessTokenRepositoryInterface` with `getNewToken/persistNewAccessToken/revokeAccessToken/isAccessTokenRevoked`.)
+**Step 1: Test**
 
-Test: persist a token, check `isAccessTokenRevoked` flips after revoke.
+```php
+<?php
 
-**Commit message:** `feat: add AccessToken entity + repository (audience as JSON array)`
+declare(strict_types=1);
+
+namespace App\Tests\OAuth\Repository;
+
+use App\OAuth\Entity\AccessToken;
+use App\OAuth\Entity\Client;
+use App\OAuth\Repository\AccessTokenRepository;
+use App\Tests\OAuth\Support\DoctrineKernelTestCase;
+use Symfony\Component\Uid\Uuid;
+
+final class AccessTokenRepositoryTest extends DoctrineKernelTestCase
+{
+    public function test_persist_and_revoke_round_trip(): void
+    {
+        $clientId = Uuid::v7();
+        $this->em->persist(new Client(
+            id: $clientId, name: 'c', secretHash: null,
+            redirectUris: ['http://localhost:8000/cb'],
+            grantTypes: ['authorization_code'], scopes: ['mcp'], dcrMetadata: [],
+        ));
+        $this->em->flush();
+
+        /** @var AccessTokenRepository $repo */
+        $repo = self::getContainer()->get(AccessTokenRepository::class);
+
+        $row = new AccessToken(
+            identifier: 'jti-1',
+            clientId: $clientId->toRfc4122(),
+            userId: 'alice',
+            expiresAt: new \DateTimeImmutable('+1 hour'),
+            scopes: ['mcp'],
+            audience: ['http://localhost:8000/mcp'],
+        );
+        $this->em->persist($row);
+        $this->em->flush();
+
+        self::assertFalse($repo->isAccessTokenRevoked('jti-1'));
+        $repo->revokeAccessToken('jti-1');
+        self::assertTrue($repo->isAccessTokenRevoked('jti-1'));
+    }
+}
+```
+
+**Step 2: Run, expect failure**
+
+**Step 3: Implement entity** `src/OAuth/Entity/AccessToken.php`
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\OAuth\Entity;
+
+use Doctrine\ORM\Mapping as ORM;
+
+#[ORM\Entity]
+#[ORM\Table(name: 'oauth_access_tokens')]
+class AccessToken
+{
+    #[ORM\Id]
+    #[ORM\Column(type: 'string', length: 191)]
+    private string $identifier;
+
+    #[ORM\Column(type: 'string', length: 191)]
+    private string $clientId;
+
+    #[ORM\Column(type: 'string', length: 191, nullable: true)]
+    private ?string $userId;
+
+    #[ORM\Column(type: 'datetime_immutable')]
+    private \DateTimeImmutable $expiresAt;
+
+    /** @var string[] */
+    #[ORM\Column(type: 'json')]
+    private array $scopes;
+
+    /** @var string[] */
+    #[ORM\Column(type: 'json')]
+    private array $audience;
+
+    #[ORM\Column(type: 'boolean')]
+    private bool $revoked = false;
+
+    /**
+     * @param string[] $scopes
+     * @param string[] $audience
+     */
+    public function __construct(
+        string $identifier,
+        string $clientId,
+        ?string $userId,
+        \DateTimeImmutable $expiresAt,
+        array $scopes,
+        array $audience,
+    ) {
+        $this->identifier = $identifier;
+        $this->clientId = $clientId;
+        $this->userId = $userId;
+        $this->expiresAt = $expiresAt;
+        $this->scopes = $scopes;
+        $this->audience = $audience;
+    }
+
+    public function getIdentifier(): string { return $this->identifier; }
+    public function getClientId(): string { return $this->clientId; }
+    public function getUserId(): ?string { return $this->userId; }
+    public function getExpiresAt(): \DateTimeImmutable { return $this->expiresAt; }
+    /** @return string[] */
+    public function getScopes(): array { return $this->scopes; }
+    /** @return string[] */
+    public function getAudience(): array { return $this->audience; }
+
+    public function isRevoked(): bool { return $this->revoked; }
+    public function revoke(): void { $this->revoked = true; }
+}
+```
+
+**Step 4: Implement repository** `src/OAuth/Repository/AccessTokenRepository.php`
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\OAuth\Repository;
+
+use App\OAuth\Entity\AccessToken;
+use Doctrine\ORM\EntityManagerInterface;
+use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
+use League\OAuth2\Server\Entities\ClientEntityInterface;
+use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
+
+final class AccessTokenRepository implements AccessTokenRepositoryInterface
+{
+    public function __construct(private readonly EntityManagerInterface $em) {}
+
+    public function getNewToken(
+        ClientEntityInterface $clientEntity,
+        array $scopes,
+        $userIdentifier = null,
+    ): AccessTokenEntityInterface {
+        // Phase B placeholder — replaced in Task C4 with McpAccessTokenEntity.
+        throw new \LogicException('AccessTokenRepository::getNewToken() is implemented in Phase C (Task C4).');
+    }
+
+    public function persistNewAccessToken(AccessTokenEntityInterface $accessTokenEntity): void
+    {
+        $row = new AccessToken(
+            identifier: $accessTokenEntity->getIdentifier(),
+            clientId: $accessTokenEntity->getClient()->getIdentifier(),
+            userId: $accessTokenEntity->getUserIdentifier() === null
+                ? null
+                : (string) $accessTokenEntity->getUserIdentifier(),
+            expiresAt: $accessTokenEntity->getExpiryDateTime(),
+            scopes: array_map(
+                fn ($s) => $s->getIdentifier(),
+                $accessTokenEntity->getScopes(),
+            ),
+            audience: method_exists($accessTokenEntity, 'getAudiences')
+                ? $accessTokenEntity->getAudiences()
+                : [],
+        );
+
+        $this->em->persist($row);
+        $this->em->flush();
+    }
+
+    public function revokeAccessToken(string $tokenId): void
+    {
+        $row = $this->em->find(AccessToken::class, $tokenId);
+        if ($row instanceof AccessToken) {
+            $row->revoke();
+            $this->em->flush();
+        }
+    }
+
+    public function isAccessTokenRevoked(string $tokenId): bool
+    {
+        $row = $this->em->find(AccessToken::class, $tokenId);
+        return $row === null || $row->isRevoked();
+    }
+}
+```
+
+**Step 5: Run the test** — it bypasses `getNewToken()` (we instantiate the Doctrine row directly), so the placeholder exception in `getNewToken()` does not block the test. Expected: test passes.
+
+**Step 6: Commit**
+
+```bash
+git add src/OAuth/Entity/AccessToken.php src/OAuth/Repository/AccessTokenRepository.php tests/OAuth/Repository/AccessTokenRepositoryTest.php
+git commit -m "feat: add AccessToken Doctrine entity + persist/revoke repository
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+```
 
 ---
 
-### Task B8: `RefreshToken` entity + repository with `family_id`
+### Task B8: `RefreshToken` Doctrine entity + repository (with `family_id`)
+
+**Architectural note:** Same shape as B7 — `RefreshToken` is the Doctrine row, NOT a `RefreshTokenEntityInterface` implementation. The interface impl lives in `src/OAuth/Extension/` (added in Phase C alongside family revocation).
 
 **Files:**
 - Create: `src/OAuth/Entity/RefreshToken.php`
 - Create: `src/OAuth/Repository/RefreshTokenRepository.php`
 - Create: `tests/OAuth/Repository/RefreshTokenRepositoryTest.php`
 
-Columns: `identifier`, `access_token_id` (FK), `family_id` (UUID), `expires_at`, `revoked`.
+**Columns:** `identifier`, `access_token_id` (string, FK to `oauth_access_tokens`), `family_id` (uuid), `expires_at`, `revoked`.
 
-**Test must include:**
-- Persist + revoke individual token.
-- `isRefreshTokenRevoked()` returns true after revocation.
-- A separate test for **family revocation** is added in Phase C alongside `RefreshTokenFamily`.
+**Test must include** (this task):
+- Persist + revoke individual token via repository.
+- `isRefreshTokenRevoked()` returns true after revocation, false otherwise.
 
-**Commit message:** `feat: add RefreshToken entity + repository with family_id column`
+**Test deferred to Phase C (C6):**
+- Family revocation on reuse.
+
+**Implementation:** Mirror `AccessToken` / `AccessTokenRepository` shape; key methods on the repository are `getNewRefreshToken()` (placeholder — `LogicException` until C6), `persistNewRefreshToken()`, `revokeRefreshToken()`, `isRefreshTokenRevoked()`.
+
+**Commit message:** `feat: add RefreshToken Doctrine entity + repository with family_id`
 
 ---
 
@@ -1657,15 +1936,90 @@ Same TDD shape. Output:
 
 ---
 
-### Task C3: `McpAccessTokenEntity` (re-implements `AccessTokenTrait`)
+### Task C3a: `KidDeriver` (shared between issuer and JWKS)
 
-**Why:** `AccessTokenTrait::convertToJWT()` is private. We must re-implement the trait to inject `aud` (array), `iss`, and `kid` header.
+**Why:** Both `McpAccessTokenEntity` (signs the JWT with `kid` header) and `JwksController` (publishes the JWK with the same `kid`) must produce the same value. Extract once, inject everywhere.
+
+**Files:**
+- Create: `src/OAuth/Extension/KidDeriver.php`
+- Create: `tests/OAuth/Extension/KidDeriverTest.php`
+
+**Step 1: Test**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\OAuth\Extension;
+
+use App\OAuth\Extension\KidDeriver;
+use PHPUnit\Framework\TestCase;
+
+final class KidDeriverTest extends TestCase
+{
+    public function test_kid_is_first_16_hex_chars_of_sha256_of_public_key_pem(): void
+    {
+        $pem = file_get_contents(__DIR__ . '/../../fixtures/public.key');
+        if ($pem === false) {
+            self::markTestSkipped('Test fixture missing — see tests/fixtures/README.md');
+        }
+
+        $kid = (new KidDeriver(__DIR__ . '/../../fixtures/public.key'))->derive();
+
+        self::assertSame(16, strlen($kid));
+        self::assertSame(substr(hash('sha256', $pem), 0, 16), $kid);
+    }
+}
+```
+
+**Step 2: Implement**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\OAuth\Extension;
+
+final class KidDeriver
+{
+    public function __construct(private readonly string $publicKeyPath) {}
+
+    public function derive(): string
+    {
+        $pem = @file_get_contents($this->publicKeyPath);
+        if ($pem === false) {
+            throw new \RuntimeException('Cannot read public key at ' . $this->publicKeyPath);
+        }
+        return substr(hash('sha256', $pem), 0, 16);
+    }
+}
+```
+
+**Step 3: Pass + commit** (`feat: add KidDeriver service for JWT/JWKS kid agreement`)
+
+Wire in `services.yaml`:
+
+```yaml
+App\OAuth\Extension\KidDeriver:
+    arguments: ['%oauth.public_key_path%']
+```
+
+---
+
+### Task C3b: `McpAccessTokenEntity` (issues JWT with aud array, iss, kid)
+
+**Why:** `AccessTokenTrait::convertToJWT()` is private. We implement the entity from scratch to inject `aud` (array), `iss`, and a `kid` header that matches `KidDeriver`.
 
 **Files:**
 - Create: `src/OAuth/Extension/McpAccessTokenEntity.php`
 - Create: `tests/OAuth/Extension/McpAccessTokenEntityTest.php`
+- Create: `tests/Stub/StubClient.php`
+- Create: `tests/fixtures/private.key`, `tests/fixtures/public.key` (test-only RSA keypair, committed)
+- Create: `tests/fixtures/README.md` documenting the keys are test-only
 
-**Reference:** league source code `League\OAuth2\Server\Entities\Traits\AccessTokenTrait::convertToJWT()`.
+**Reference:** `lcobucci/jwt` v5 Builder API: `Configuration::forAsymmetricSigner($signer, $signingKey, $verificationKey)` requires both keys non-empty; `$config->builder()->getToken($signer, $key)` returns a **`Plain` token whose `toString()` is the already-signed compact serialization**. There is no separate `signer()->sign(...)` step.
 
 **Step 1: Test (decodes the produced JWT and asserts claims)**
 
@@ -1695,7 +2049,10 @@ final class McpAccessTokenEntityTest extends TestCase
             self::markTestSkipped('Generate test keys: see tests/fixtures/README.md');
         }
 
-        $token = new McpAccessTokenEntity('http://localhost:8000');
+        $token = new McpAccessTokenEntity(
+            'http://localhost:8000',
+            new \App\OAuth\Extension\KidDeriver($publicPath),
+        );
         $token->setIdentifier('jti-1');
         $token->setExpiryDateTime(new \DateTimeImmutable('+1 hour'));
         $token->setUserIdentifier('alice');
@@ -1737,80 +2094,84 @@ use League\OAuth2\Server\CryptKey;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Entities\ScopeEntityInterface;
-use League\OAuth2\Server\Entities\Traits\EntityTrait;
-use League\OAuth2\Server\Entities\Traits\TokenEntityTrait;
 
 final class McpAccessTokenEntity implements AccessTokenEntityInterface
 {
-    use EntityTrait;
-    use TokenEntityTrait;
-
+    private string $identifier = '';
+    private \DateTimeImmutable $expiryDateTime;
     private CryptKey $privateKey;
     private ClientEntityInterface $client;
-    private string $userIdentifier = '';
+    private ?string $userIdentifier = null;
     /** @var ScopeEntityInterface[] */
     private array $scopes = [];
     /** @var string[] */
     private array $audiences = [];
 
-    public function __construct(private readonly string $issuer) {}
+    public function __construct(
+        private readonly string $issuer,
+        private readonly KidDeriver $kidDeriver,
+    ) {}
 
+    // --- AccessTokenEntityInterface ---
     public function setPrivateKey(CryptKey $privateKey): void { $this->privateKey = $privateKey; }
     public function setClient(ClientEntityInterface $client): void { $this->client = $client; }
     public function getClient(): ClientEntityInterface { return $this->client; }
-    public function setUserIdentifier($identifier): void { $this->userIdentifier = (string) $identifier; }
-    public function getUserIdentifier(): string { return $this->userIdentifier; }
+    public function setUserIdentifier($identifier): void
+    {
+        $this->userIdentifier = $identifier === null ? null : (string) $identifier;
+    }
+    public function getUserIdentifier() { return $this->userIdentifier; }
     public function addScope(ScopeEntityInterface $scope): void { $this->scopes[] = $scope; }
     /** @return ScopeEntityInterface[] */
     public function getScopes(): array { return $this->scopes; }
+    public function getIdentifier(): string { return $this->identifier; }
+    public function setIdentifier($identifier): void { $this->identifier = (string) $identifier; }
+    public function getExpiryDateTime(): \DateTimeImmutable { return $this->expiryDateTime; }
+    public function setExpiryDateTime(\DateTimeImmutable $expiryDateTime): void { $this->expiryDateTime = $expiryDateTime; }
 
     /** @param string[] $audiences */
     public function setAudiences(array $audiences): void { $this->audiences = $audiences; }
+    /** @return string[] */
+    public function getAudiences(): array { return $this->audiences; }
 
     public function __toString(): string
     {
-        $config = Configuration::forAsymmetricSigner(
-            new Sha256(),
-            InMemory::file($this->privateKey->getKeyPath(), $this->privateKey->getPassPhrase() ?? ''),
-            InMemory::plainText('') // public key not needed for signing
+        // For asymmetric signing the verification key isn't actually used, but lcobucci/jwt v5
+        // demands it be a non-empty Key instance — pass the same private key for both slots.
+        $signingKey = InMemory::file(
+            $this->privateKey->getKeyPath(),
+            $this->privateKey->getPassPhrase() ?? '',
         );
+        $config = Configuration::forAsymmetricSigner(new Sha256(), $signingKey, $signingKey);
 
-        $kid = $this->deriveKid();
-
+        $now = new DateTimeImmutable();
         $builder = $config->builder()
-            ->withHeader('kid', $kid)
+            ->withHeader('kid', $this->kidDeriver->derive())
             ->issuedBy($this->issuer)
-            ->identifiedBy($this->getIdentifier())
-            ->issuedAt(new DateTimeImmutable())
-            ->canOnlyBeUsedAfter(new DateTimeImmutable())
-            ->expiresAt($this->getExpiryDateTime())
-            ->relatedTo($this->userIdentifier)
+            ->identifiedBy($this->identifier)
+            ->issuedAt($now)
+            ->canOnlyBeUsedAfter($now)
+            ->expiresAt($this->expiryDateTime)
             ->withClaim('client_id', $this->client->getIdentifier())
             ->withClaim('scope', implode(' ', array_map(
-                fn (ScopeEntityInterface $s) => $s->getIdentifier(),
+                static fn (ScopeEntityInterface $s) => $s->getIdentifier(),
                 $this->scopes,
             )));
 
+        if ($this->userIdentifier !== null) {
+            $builder = $builder->relatedTo($this->userIdentifier);
+        }
         if ($this->audiences !== []) {
             $builder = $builder->permittedFor(...$this->audiences);
         }
 
-        return $config->signer()->sign(
-            $builder->getToken($config->signer(), $config->signingKey())->toString(),
-            $config->signingKey(),
-        ) ?: $builder->getToken($config->signer(), $config->signingKey())->toString();
-    }
-
-    private function deriveKid(): string
-    {
-        // Derive kid from public key fingerprint so JWKS publishes the same value.
-        $publicKeyPem = file_get_contents(str_replace('private.key', 'public.key', $this->privateKey->getKeyPath()));
-        return substr(hash('sha256', (string) $publicKeyPem), 0, 16);
+        // getToken() returns a Plain token already signed with the configured signer + key.
+        return $builder
+            ->getToken($config->signer(), $config->signingKey())
+            ->toString();
     }
 }
 ```
-
-(Note: the actual `lcobucci/jwt` v5 API uses `$builder->getToken($signer, $key)`, which returns a `Plain` token whose `toString()` is the signed compact form. Adjust based on the installed minor version.)
 
 **Step 3: Pass + commit** (`feat: add McpAccessTokenEntity with aud-array, iss, kid claims`)
 
@@ -1843,12 +2204,13 @@ Add test: `getNewToken()` returns an `McpAccessTokenEntity` with the configured 
 
 Implementation:
 - Extend `League\OAuth2\Server\Grant\AuthorizationCodeGrant`.
-- Override `validateAuthorizationRequest()` to throw `invalidRequest('code_challenge required')` if missing.
-- Override `respondToAccessTokenRequest()` to:
-  1. Read `resource` from `getRequestParameter`.
-  2. Validate against `$this->allowedResources` (constructor-injected) and `https`/`http://localhost` scheme rule.
-  3. Call parent to get the `AccessTokenEntityInterface` (= `McpAccessTokenEntity`).
-  4. Cast to `McpAccessTokenEntity` and call `setAudiences([$resource])` before returning the response.
+- **PKCE enforcement.** league v9 calls `validateAuthorizationRequest()` from `respondToAuthorizationRequest()`; the public surface stable across v9 minors is `respondToAuthorizationRequest()`. Before calling `parent::respondToAuthorizationRequest()`, inspect the `ServerRequestInterface` for `code_challenge`. Missing → `OAuthServerException::invalidRequest('code_challenge', 'PKCE required')`. Wrong method (`code_challenge_method !== 'S256'`) → same. Add a unit test that grep-confirms the override location by class name (`(new ReflectionClass(ResourceIndicatorGrant::class))->hasMethod('respondToAuthorizationRequest')`) — this catches refactors in upstream that move the hook.
+- **Resource validation + aud injection.** Override `respondToAccessTokenRequest()`:
+  1. Read `resource` via `$this->getRequestParameter('resource', $request)`.
+  2. If null → `OAuthServerException::invalidTarget('resource is required')`.
+  3. If scheme is not `https://` and not `http://localhost...` → `invalidTarget('resource scheme must be https')`.
+  4. If `! $this->allowedResources->contains($resource)` → `invalidTarget('resource not allowed')`.
+  5. Call parent for the access-token issuance path; the parent fills `$accessToken` via `AccessTokenRepository::getNewToken()` (Phase C4 returns `McpAccessTokenEntity`). Capture the entity before the response is finalized via the league protected hook `issueAccessToken()` — override it to call `$accessToken->setAudiences([$resource])` then delegate to parent. Test that the JWT in the final response has `aud === [$resource]`.
 
 **Commit:** `feat: add ResourceIndicatorGrant enforcing PKCE + RFC 8707`
 
@@ -1929,12 +2291,12 @@ Build the `League\OAuth2\Server\AuthorizationServer` instance:
 
 ### Task D2: `services.yaml` — register extensions and parameters
 
-Add parameters for `OAUTH_ISSUER` and `MCP_ALLOWED_RESOURCES` (split on comma at parse time):
+`%env(csv:VAR)%` splits on comma but does **not** trim whitespace. To satisfy the spec's "trim each element after split", we keep the env processor for split and trim inside the consumer (or register a small factory service).
 
 ```yaml
 parameters:
     oauth.issuer: '%env(OAUTH_ISSUER)%'
-    oauth.allowed_resources: '%env(csv:MCP_ALLOWED_RESOURCES)%'
+    oauth.allowed_resources_raw: '%env(csv:MCP_ALLOWED_RESOURCES)%'
     oauth.private_key_path: '%env(OAUTH_PRIVATE_KEY_PATH)%'
     oauth.public_key_path: '%env(OAUTH_PUBLIC_KEY_PATH)%'
     oauth.encryption_key: '%env(OAUTH_ENCRYPTION_KEY)%'
@@ -1951,19 +2313,52 @@ services:
     App\OAuth\Extension\ServerMetadataBuilder:
         arguments: ['%oauth.issuer%']
 
+    # Trim each element here so consumers see the clean list.
+    App\OAuth\Extension\AllowedResources:
+        arguments:
+            $values: '%oauth.allowed_resources_raw%'
+
+    App\OAuth\Extension\KidDeriver:
+        arguments: ['%oauth.public_key_path%']
+
     App\OAuth\Extension\ProtectedResourceMetadataBuilder:
         arguments:
             $issuer: '%oauth.issuer%'
-            $allowedResources: '%oauth.allowed_resources%'
+            $allowedResources: '@App\OAuth\Extension\AllowedResources'
 
     App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
         arguments:
             $allowedHosts: ['localhost', '127.0.0.1']
 ```
 
-Verify with `bin/console debug:container App\\OAuth\\…` for each.
+`AllowedResources` is a tiny value object that trims its input — add it as part of this task:
 
-**Commit:** `chore: wire OAuth services in services.yaml`
+```php
+<?php
+declare(strict_types=1);
+namespace App\OAuth\Extension;
+
+final class AllowedResources
+{
+    /** @var string[] */
+    private readonly array $resources;
+
+    /** @param string[] $values */
+    public function __construct(array $values)
+    {
+        $this->resources = array_values(array_filter(array_map('trim', $values), static fn (string $v) => $v !== ''));
+    }
+
+    /** @return string[] */
+    public function all(): array { return $this->resources; }
+
+    public function contains(string $resource): bool { return in_array($resource, $this->resources, true); }
+}
+```
+
+Verify with `docker compose exec app php bin/console debug:container App\\OAuth\\…` for each registered service.
+
+**Commit:** `chore: wire OAuth services in services.yaml (with AllowedResources trim)`
 
 ---
 
@@ -1975,9 +2370,32 @@ Verify with `bin/console debug:container App\\OAuth\\…` for each.
 - Create: `src/Controller/WellKnown/JwksController.php`
 - Create: `tests/Controller/WellKnown/*` (functional, `WebTestCase`)
 
-JwksController publishes the public key as a single JWK with `kid` = sha256 of the PEM (matches `McpAccessTokenEntity::deriveKid()`).
+`JwksController` reads the RSA public key with `openssl_pkey_get_details()` and publishes a single JWK:
 
-**Tests** assert exact JSON keys and that `issuer` strings match between the two metadata documents.
+```php
+$pem = file_get_contents($publicKeyPath);
+$details = openssl_pkey_get_details(openssl_pkey_get_public($pem));
+// $details['rsa']['n'] and $details['rsa']['e'] are raw bytes — base64url encode without padding.
+$base64url = static fn (string $bytes) => rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+
+return new JsonResponse([
+    'keys' => [[
+        'kty' => 'RSA',
+        'use' => 'sig',
+        'alg' => 'RS256',
+        'kid' => $kidDeriver->derive(),
+        'n'   => $base64url($details['rsa']['n']),
+        'e'   => $base64url($details['rsa']['e']),
+    ]],
+]);
+```
+
+Inject `KidDeriver` from C3a so the published `kid` matches the one signed into the JWT.
+
+**Tests** assert:
+- AS metadata `issuer` is byte-equal to PRM `authorization_servers[0]`.
+- JWKS endpoint returns `kty=RSA, alg=RS256` and a non-empty `kid`.
+- The same `kid` value also appears in a token issued via the test fixture key (cross-check by parsing a JWT issued from `McpAccessTokenEntity` against the `KidDeriver` output).
 
 **Commit:** `feat: add /.well-known/* discovery endpoints`
 
@@ -1988,32 +2406,121 @@ JwksController publishes the public key as a single JWK with `kid` = sha256 of t
 **Files:**
 - Create: `src/Controller/OAuth/ClientRegistrationController.php`
 - Create: `tests/Controller/OAuth/ClientRegistrationControllerTest.php`
-- Modify: `config/packages/rate_limiter.yaml` — define a limiter `dcr` (token bucket, e.g. 5/minute per IP).
+- Create: `config/packages/rate_limiter.yaml`
 
-Wire the limiter as `dcr` in the controller; on exhaustion return 429 with `Retry-After`.
+Symfony 8 RateLimiter config (Flex's recipe may stub this):
+
+```yaml
+framework:
+    rate_limiter:
+        dcr:
+            policy: 'token_bucket'
+            limit: 5
+            rate: { interval: '1 minute', amount: 5 }
+```
+
+The framework auto-creates a `limiter.dcr` service implementing `RateLimiterFactory`. Inject it into the controller (constructor: `private RateLimiterFactory $dcrLimiter` with the `#[Target('dcr')]` attribute or service id `limiter.dcr`).
+
+In the controller:
+
+```php
+$limit = $this->dcrLimiter->create($request->getClientIp() ?? 'anon')->consume(1);
+if (!$limit->isAccepted()) {
+    return new JsonResponse(['error' => 'too_many_requests'], 429, [
+        'Retry-After' => (string) $limit->getRetryAfter()->getTimestamp() - time(),
+    ]);
+}
+```
 
 Functional tests:
-- Successful registration → 201, `client_id` in body, original `redirect_uris` preserved in body.
+- Successful registration → 201, `client_id` in body, **original** `redirect_uris` preserved verbatim in body (per RFC 7591 §3.2.1).
 - Invalid `redirect_uri` host → 400, `error=invalid_redirect_uri`.
-- 6 rapid POSTs from same IP → last is 429.
+- 6 rapid POSTs from same IP → last is 429 with `Retry-After`.
 
 **Commit:** `feat: add /oauth/register (DCR) with rate limit and host allowlist`
 
 ---
 
-### Task D5: Authorize controller + login + consent
+### Task D5a: Login form + Symfony Security firewall
 
 **Files:**
-- Modify: `config/packages/security.yaml` — InMemory provider, form_login firewall on `/oauth/*`.
-- Create: `src/Controller/SecurityController.php` — login form (Twig template `templates/security/login.html.twig`).
-- Create: `src/Controller/OAuth/AuthorizationController.php` — handles GET `/oauth/authorize`. If unauthenticated, stores the full request in session (`oauth.pending_authorization_request`) and redirects to login with `_target_path=/oauth/authorize?...`. Once authenticated, renders consent form.
-- Create: `src/Controller/OAuth/ConsentController.php` — POST handler. Validates CSRF, pops the pending request from session (one-shot), then calls `AuthorizationServer::completeAuthorizationRequest()`.
-- Create: Twig templates for login, consent.
-- Create: functional tests covering each branch from design §5.
+- Modify: `config/packages/security.yaml` — InMemoryUserProvider with one user `alice`, `form_login` firewall covering `/oauth/authorize` and `/oauth/consent`.
+- Create: `src/Controller/SecurityController.php` — `#[Route('/login')]` returning the login form.
+- Create: `templates/security/login.html.twig`.
+- Create: `tests/Controller/SecurityControllerTest.php` — GET `/login` 200, POST with valid creds → 302 to `/`, with invalid creds → 422 + error.
 
-This is the largest single task; if it grows past ~250 lines of source, split into D5a (login + storage), D5b (consent + one-shot).
+`security.yaml` skeleton:
 
-**Commit:** `feat: add /oauth/authorize and /oauth/consent with form-login + one-shot`
+```yaml
+security:
+    password_hashers:
+        Symfony\Component\Security\Core\User\InMemoryUser: 'auto'
+    providers:
+        in_memory:
+            memory:
+                users:
+                    alice: { password: '$argon2id$…paste-output-of-security:hash-password…', roles: ['ROLE_USER'] }
+    firewalls:
+        dev:
+            pattern: ^/(_(profiler|wdt)|css|images|js)/
+            security: false
+        main:
+            lazy: true
+            provider: in_memory
+            form_login:
+                login_path: app_login
+                check_path: app_login
+                enable_csrf: true
+            logout:
+                path: app_logout
+    access_control:
+        - { path: ^/login,    roles: PUBLIC_ACCESS }
+        - { path: ^/oauth/(authorize|consent), roles: ROLE_USER }
+        - { path: ^/.well-known/, roles: PUBLIC_ACCESS }
+        - { path: ^/oauth/(register|token), roles: PUBLIC_ACCESS }
+```
+
+For the `alice` password, run once on the host:
+
+```bash
+docker compose exec app php bin/console security:hash-password
+# enter "password" or another dev value, paste the hash into security.yaml
+```
+
+**Commit:** `feat: add login form + InMemory user 'alice', firewall over /oauth/*`
+
+---
+
+### Task D5b: Authorization endpoint with session storage
+
+**Files:**
+- Create: `src/Controller/OAuth/AuthorizationController.php` — `GET /oauth/authorize`. Uses `AuthorizationServer::validateAuthorizationRequest()` from `league/oauth2-server`, stores the resulting `AuthorizationRequest` in `Session::set('oauth.pending_authorization_request', …)`, then renders the consent template (the user is guaranteed authenticated by the firewall — no manual redirect needed).
+- Create: `templates/oauth/consent.html.twig` — shows client name, requested scopes, Allow / Deny buttons (Symfony form with CSRF token `consent`).
+- Create: `tests/Controller/OAuth/AuthorizationControllerTest.php` — covers:
+  - Unauthenticated → redirect to `/login`.
+  - Authenticated, missing `code_challenge` → 400 with `error=invalid_request`.
+  - Authenticated, valid request → 200, consent form rendered, session contains the pending request.
+
+**Commit:** `feat: add /oauth/authorize with session-stored AuthorizationRequest`
+
+---
+
+### Task D5c: Consent endpoint with one-shot consumption
+
+**Files:**
+- Create: `src/Controller/OAuth/ConsentController.php` — `POST /oauth/consent`. Steps:
+  1. Validate CSRF token `consent`. On failure: 400.
+  2. Pop pending request from session (`Session::get(...)` then `remove(...)`). If absent: 400.
+  3. Read `decision` form field (`allow` or `deny`). For `deny`, set `$authReq->setAuthorizationApproved(false)`; for `allow`, set the user (Symfony Security's authenticated user wrapped in `App\OAuth\Entity\User($id)`).
+  4. Pass `$authReq` to `AuthorizationServer::completeAuthorizationRequest($authReq, $response)` and return the resulting redirect.
+- Create: `tests/Controller/OAuth/ConsentControllerTest.php` — covers:
+  - CSRF missing → 400.
+  - No pending request in session → 400.
+  - Allow → 302 to redirect_uri with `code` + `state`.
+  - Replay (POST again with same form) → 400 (one-shot consumed).
+  - Deny → 302 with `error=access_denied`.
+
+**Commit:** `feat: add /oauth/consent with CSRF + one-shot session consumption`
 
 ---
 

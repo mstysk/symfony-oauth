@@ -314,7 +314,7 @@ CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]
   ```bash
   docker compose run --rm app vendor/bin/generate-defuse-key
   ```
-  出力された文字列をそのまま `.env` の `OAUTH_ENCRYPTION_KEY=` に貼る。`base64_encode(random_bytes(32))` ではフォーマット違反で `league/oauth2-server` 起動時に例外。
+  出力された文字列をそのまま `.env` の `OAUTH_ENCRYPTION_KEY=` に貼る。`league/oauth2-server` v9 は生のランダム文字列も受け付ける (内部で `defuse/php-encryption` 形式の文字列なら `Crypto`、それ以外なら `sodium_crypto_secretbox_keygen` 相当の鍵として扱う) ため、PoC では `vendor/bin/generate-defuse-key` を推奨手段としつつ、緊急用に `php -r 'echo base64_encode(random_bytes(32)) . PHP_EOL;'` も許容する。本番では必ず `defuse` 形式に揃える。
 
 ### `security.yaml` のユーザー定義 (PoC)
 
