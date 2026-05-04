@@ -29,10 +29,11 @@ final class ClientRegistrationControllerTest extends WebTestCase
         }
 
         // Reset rate-limiter buckets so tests don't bleed into each other
-        // (the limiter persists state in cache.app across kernel reboots).
-        $cache = self::getContainer()->get('cache.app');
-        \assert($cache instanceof CacheInterface);
-        $cache->clear();
+        // (the limiter uses cache.rate_limiter, which persists state across
+        // kernel reboots within a phpunit run).
+        $rateLimiterCache = self::getContainer()->get('cache.rate_limiter');
+        \assert($rateLimiterCache instanceof CacheInterface);
+        $rateLimiterCache->clear();
     }
 
     public function test_successful_registration_returns_201_with_original_redirect_uris(): void

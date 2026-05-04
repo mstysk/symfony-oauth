@@ -106,6 +106,43 @@ final class TokenControllerTest extends WebTestCase
         self::assertSame('invalid_target', $body['error']);
     }
 
+    public function test_refresh_token_grant_issues_a_new_access_token(): void
+    {
+        $this->loginAsAlice();
+        $code = $this->runAuthorizeAndConsent();
+
+        // 1) Exchange the auth code for the initial token pair.
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => $this->clientId,
+            'redirect_uri' => 'http://localhost:8000/cb',
+            'code_verifier' => self::CODE_VERIFIER,
+            'code' => $code,
+            'resource' => 'http://localhost:8000/mcp',
+        ]);
+        self::assertSame(200, $this->client->getResponse()->getStatusCode());
+        $first = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        self::assertArrayHasKey('refresh_token', $first);
+
+        // 2) Use the refresh_token to issue a fresh access_token.
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => $this->clientId,
+            'refresh_token' => $first['refresh_token'],
+        ]);
+
+        self::assertSame(
+            200,
+            $this->client->getResponse()->getStatusCode(),
+            'refresh_token grant should be enabled — got: ' . (string) $this->client->getResponse()->getContent(),
+        );
+
+        $second = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        self::assertArrayHasKey('access_token', $second);
+        self::assertNotSame($first['access_token'], $second['access_token']);
+        self::assertArrayHasKey('refresh_token', $second);
+    }
+
     private function seedClient(): string
     {
         $id = Uuid::v7();
