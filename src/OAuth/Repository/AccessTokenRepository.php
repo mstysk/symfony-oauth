@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\OAuth\Repository;
 
 use App\OAuth\Entity\AccessToken;
+use App\OAuth\Extension\KidDeriver;
+use App\OAuth\Extension\McpAccessTokenEntity;
 use Doctrine\ORM\EntityManagerInterface;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
@@ -13,8 +15,12 @@ use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
 
 final class AccessTokenRepository implements AccessTokenRepositoryInterface
 {
-    public function __construct(private readonly EntityManagerInterface $em)
-    {
+    public function __construct(
+        private readonly EntityManagerInterface $em,
+        private readonly string $issuer,
+        private readonly KidDeriver $kidDeriver,
+        private readonly string $publicKeyPath,
+    ) {
     }
 
     /**
@@ -25,8 +31,16 @@ final class AccessTokenRepository implements AccessTokenRepositoryInterface
         array $scopes,
         ?string $userIdentifier = null,
     ): AccessTokenEntityInterface {
-        // Phase B placeholder — replaced in Task C4 with McpAccessTokenEntity.
-        throw new \LogicException('AccessTokenRepository::getNewToken() is implemented in Phase C (Task C4).');
+        $token = new McpAccessTokenEntity($this->issuer, $this->kidDeriver, $this->publicKeyPath);
+        $token->setClient($clientEntity);
+        foreach ($scopes as $scope) {
+            $token->addScope($scope);
+        }
+        if ($userIdentifier !== null) {
+            $token->setUserIdentifier((string) $userIdentifier);
+        }
+
+        return $token;
     }
 
     public function persistNewAccessToken(AccessTokenEntityInterface $accessTokenEntity): void

@@ -30,6 +30,13 @@ services:
             $scopes:
                 mcp: 'MCP access'
 
+    # AccessTokenRepository builds McpAccessTokenEntity per request and so
+    # needs the JWT issuer + the public-key path (for KidDeriver agreement).
+    App\OAuth\Repository\AccessTokenRepository:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+
     # OAuth extensions whose constructors take string/array primitives.
     App\OAuth\Extension\AllowedResources:
         arguments:
@@ -74,6 +81,11 @@ when@test:
             arguments:
                 $scopes:
                     mcp: 'MCP access'
+
+        App\OAuth\Repository\AccessTokenRepository:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+                $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
 
         App\OAuth\Extension\AllowedResources:
             arguments:
