@@ -79,6 +79,16 @@ services:
         arguments:
             $allowedHosts: ['localhost', '127.0.0.1']
 
+    # PSR-7 Bridge — convert Symfony Request <-> PSR-7 ServerRequest so
+    # the league AuthorizationServer can consume Symfony controller args.
+    Nyholm\Psr7\Factory\Psr17Factory: ~
+    Psr\Http\Message\ServerRequestFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\StreamFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\UploadedFileFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\ResponseFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface: '@Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory'
+    Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory: ~
+
     # AuthorizationServerFactory holds the env-derived strings the league
     # AuthorizationServer needs at construction time.
     App\OAuth\Server\AuthorizationServerFactory:
