@@ -70,6 +70,11 @@ services:
         arguments:
             $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
 
+    App\Controller\WellKnown\JwksController:
+        arguments:
+            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+        tags: ['controller.service_arguments']
+
     App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
         arguments:
             $allowedHosts: ['localhost', '127.0.0.1']
