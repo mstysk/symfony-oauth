@@ -18,6 +18,11 @@ services:
     # this creates a service per class whose id is the fully-qualified class name
     App\:
         resource: '../src/'
+        exclude:
+            # Per-request value objects, not services. Built by their owning
+            # repository / grant.
+            - '../src/OAuth/Extension/McpAccessTokenEntity.php'
+            - '../src/OAuth/Entity/'
 
     # ScopeRepository takes a scope-id => description array; not autowireable.
     App\OAuth\Repository\ScopeRepository:
@@ -59,6 +64,8 @@ when@test:
             resource: '../src/OAuth/Repository/'
         App\OAuth\Extension\:
             resource: '../src/OAuth/Extension/'
+            exclude:
+                - '../src/OAuth/Extension/McpAccessTokenEntity.php'
 
         # Re-apply the explicit arguments that the resource patterns above
         # would otherwise blow away (test resource patterns auto-wire by
