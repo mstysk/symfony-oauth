@@ -37,6 +37,21 @@ services:
             $issuer: '%env(OAUTH_ISSUER)%'
             $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
 
+    # league/oauth2-server interface -> App impl aliases (so autowire can
+    # resolve them in ResourceIndicatorGrant and AuthorizationServerFactory).
+    League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface: '@App\OAuth\Repository\AuthCodeRepository'
+    League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface: '@App\OAuth\Repository\AccessTokenRepository'
+    League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface: '@App\OAuth\Repository\RefreshTokenRepository'
+    League\OAuth2\Server\Repositories\ClientRepositoryInterface: '@App\OAuth\Repository\ClientRepository'
+    League\OAuth2\Server\Repositories\ScopeRepositoryInterface: '@App\OAuth\Repository\ScopeRepository'
+    League\OAuth2\Server\Repositories\UserRepositoryInterface: '@App\OAuth\Repository\UserRepository'
+
+    # ResourceIndicatorGrant constructor needs the auth code TTL (DateInterval)
+    # which can't be autowired.
+    App\OAuth\Extension\ResourceIndicatorGrant:
+        arguments:
+            $authCodeTTL: !service { class: 'DateInterval', arguments: ['%env(OAUTH_AUTH_CODE_TTL)%'] }
+
     # OAuth extensions whose constructors take string/array primitives.
     App\OAuth\Extension\AllowedResources:
         arguments:
@@ -86,6 +101,19 @@ when@test:
             arguments:
                 $issuer: '%env(OAUTH_ISSUER)%'
                 $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+
+        # league interface aliases (test resource pattern overrides the dev
+        # ones, so re-declare here).
+        League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface: '@App\OAuth\Repository\AuthCodeRepository'
+        League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface: '@App\OAuth\Repository\AccessTokenRepository'
+        League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface: '@App\OAuth\Repository\RefreshTokenRepository'
+        League\OAuth2\Server\Repositories\ClientRepositoryInterface: '@App\OAuth\Repository\ClientRepository'
+        League\OAuth2\Server\Repositories\ScopeRepositoryInterface: '@App\OAuth\Repository\ScopeRepository'
+        League\OAuth2\Server\Repositories\UserRepositoryInterface: '@App\OAuth\Repository\UserRepository'
+
+        App\OAuth\Extension\ResourceIndicatorGrant:
+            arguments:
+                $authCodeTTL: !service { class: 'DateInterval', arguments: ['%env(OAUTH_AUTH_CODE_TTL)%'] }
 
         App\OAuth\Extension\AllowedResources:
             arguments:
