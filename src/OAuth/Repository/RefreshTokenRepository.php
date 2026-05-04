@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\OAuth\Repository;
 
 use App\OAuth\Entity\RefreshToken;
+use App\OAuth\Extension\SimpleRefreshTokenEntity;
 use Doctrine\ORM\EntityManagerInterface;
 use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
 use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
+use Symfony\Component\Uid\Uuid;
 
 final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
 {
@@ -17,30 +19,69 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
 
     public function getNewRefreshToken(): ?RefreshTokenEntityInterface
     {
-        // Phase B placeholder — replaced in Task C6 with the family-aware
-        // RefreshToken entity. Tests construct RefreshToken rows directly
-        // until then.
-        throw new \LogicException('RefreshTokenRepository::getNewRefreshToken() is implemented in Phase C (Task C6).');
+        return new SimpleRefreshTokenEntity();
     }
 
     public function persistNewRefreshToken(RefreshTokenEntityInterface $refreshTokenEntity): void
     {
-        // Wired up in Task C6 alongside getNewRefreshToken().
-        throw new \LogicException('RefreshTokenRepository::persistNewRefreshToken() is implemented in Phase C (Task C6).');
+        if (!$refreshTokenEntity instanceof SimpleRefreshTokenEntity) {
+            throw new \LogicException(sprintf(
+                'Unexpected refresh token entity %s; expected %s.',
+                $refreshTokenEntity::class,
+                SimpleRefreshTokenEntity::class,
+            ));
+        }
+
+        $row = new RefreshToken(
+            identifier: $refreshTokenEntity->getIdentifier(),
+            accessTokenId: $refreshTokenEntity->getAccessToken()->getIdentifier(),
+            familyId: $refreshTokenEntity->getFamilyId() ?? Uuid::v7(),
+            expiresAt: $refreshTokenEntity->getExpiryDateTime(),
+        );
+
+        $this->em->persist($row);
+        $this->em->flush();
     }
 
     public function revokeRefreshToken(string $tokenId): void
     {
         $row = $this->em->find(RefreshToken::class, $tokenId);
-        if ($row instanceof RefreshToken) {
-            $row->revoke();
-            $this->em->flush();
+        if (!$row instanceof RefreshToken) {
+            return;
         }
+
+        if ($row->isRevoked()) {
+            // RFC 9700 §4.14 — re-use detected. Revoke the entire family.
+            $this->revokeFamily($row->getFamilyId());
+
+            return;
+        }
+
+        $row->revoke();
+        $this->em->flush();
     }
 
     public function isRefreshTokenRevoked(string $tokenId): bool
     {
         $row = $this->em->find(RefreshToken::class, $tokenId);
+
         return $row === null || $row->isRevoked();
+    }
+
+    private function revokeFamily(Uuid $familyId): void
+    {
+        $rows = $this->em->getRepository(RefreshToken::class)->findBy([
+            'familyId' => $familyId,
+        ]);
+        $changed = false;
+        foreach ($rows as $row) {
+            if (!$row->isRevoked()) {
+                $row->revoke();
+                $changed = true;
+            }
+        }
+        if ($changed) {
+            $this->em->flush();
+        }
     }
 }
