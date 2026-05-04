@@ -12,7 +12,7 @@
     {% endfor %}
 </ul>
 
-<form method="post" action="/oauth/consent">
+<form method="post" action="{{ path('app_oauth_consent') }}">
     <input type="hidden" name="_token" value="{{ csrf_token('consent') }}">
     <button type="submit" name="decision" value="allow">Allow</button>
     <button type="submit" name="decision" value="deny">Deny</button>

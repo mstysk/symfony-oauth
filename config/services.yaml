@@ -88,6 +88,8 @@ services:
     Psr\Http\Message\ResponseFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
     Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface: '@Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory'
     Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory: ~
+    Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface: '@Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory'
+    Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory: ~
 
     # AuthorizationServerFactory holds the env-derived strings the league
     # AuthorizationServer needs at construction time.
