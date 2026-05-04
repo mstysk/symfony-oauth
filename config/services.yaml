@@ -69,6 +69,10 @@ services:
         arguments:
             $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
 
+    App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
+        arguments:
+            $allowedHosts: ['localhost', '127.0.0.1']
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
@@ -130,3 +134,7 @@ when@test:
         App\OAuth\Extension\KidDeriver:
             arguments:
                 $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+
+        App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
+            arguments:
+                $allowedHosts: ['localhost', '127.0.0.1']
