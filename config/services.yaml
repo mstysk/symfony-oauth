@@ -22,6 +22,7 @@ services:
             # Per-request value objects, not services. Built by their owning
             # repository / grant.
             - '../src/OAuth/Extension/McpAccessTokenEntity.php'
+            - '../src/OAuth/Extension/SimpleRefreshTokenEntity.php'
             - '../src/OAuth/Entity/'
 
     # ScopeRepository takes a scope-id => description array; not autowireable.
@@ -101,6 +102,7 @@ when@test:
             resource: '../src/OAuth/Extension/'
             exclude:
                 - '../src/OAuth/Extension/McpAccessTokenEntity.php'
+                - '../src/OAuth/Extension/SimpleRefreshTokenEntity.php'
 
         # Re-apply the explicit arguments that the resource patterns above
         # would otherwise blow away (test resource patterns auto-wire by
