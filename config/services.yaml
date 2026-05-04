@@ -73,6 +73,15 @@ services:
         arguments:
             $allowedHosts: ['localhost', '127.0.0.1']
 
+    # AuthorizationServerFactory holds the env-derived strings the league
+    # AuthorizationServer needs at construction time.
+    App\OAuth\Server\AuthorizationServerFactory:
+        arguments:
+            $privateKeyPath: '%env(OAUTH_PRIVATE_KEY_PATH)%'
+            $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
+            $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
+            $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
@@ -138,3 +147,10 @@ when@test:
         App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
             arguments:
                 $allowedHosts: ['localhost', '127.0.0.1']
+
+        App\OAuth\Server\AuthorizationServerFactory:
+            arguments:
+                $privateKeyPath: '%env(OAUTH_PRIVATE_KEY_PATH)%'
+                $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
+                $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
+                $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'
