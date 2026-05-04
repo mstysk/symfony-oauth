@@ -25,6 +25,23 @@ services:
             $scopes:
                 mcp: 'MCP access'
 
+    # OAuth extensions whose constructors take string/array primitives.
+    App\OAuth\Extension\AllowedResources:
+        arguments:
+            $values: '%env(csv:MCP_ALLOWED_RESOURCES)%'
+
+    App\OAuth\Extension\ServerMetadataBuilder:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+
+    App\OAuth\Extension\ProtectedResourceMetadataBuilder:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+
+    App\OAuth\Extension\KidDeriver:
+        arguments:
+            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
@@ -43,9 +60,26 @@ when@test:
         App\OAuth\Extension\:
             resource: '../src/OAuth/Extension/'
 
-        # Re-apply the explicit array argument that the resource pattern
-        # above would otherwise blow away.
+        # Re-apply the explicit arguments that the resource patterns above
+        # would otherwise blow away (test resource patterns auto-wire by
+        # default, which fails on string/array primitives).
         App\OAuth\Repository\ScopeRepository:
             arguments:
                 $scopes:
                     mcp: 'MCP access'
+
+        App\OAuth\Extension\AllowedResources:
+            arguments:
+                $values: '%env(csv:MCP_ALLOWED_RESOURCES)%'
+
+        App\OAuth\Extension\ServerMetadataBuilder:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+
+        App\OAuth\Extension\ProtectedResourceMetadataBuilder:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+
+        App\OAuth\Extension\KidDeriver:
+            arguments:
+                $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
