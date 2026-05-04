@@ -55,6 +55,8 @@ final class ClientRegistrarTest extends DoctrineKernelTestCase
         ]);
 
         self::assertNotEmpty($response['client_secret']);
+        // RFC 7591 §3.2.1 — REQUIRED when client_secret is issued.
+        self::assertSame(0, $response['client_secret_expires_at']);
 
         $row = $this->em->getRepository(Client::class)->findOneBy([
             'clientIdentifier' => $response['client_id'],
@@ -62,5 +64,20 @@ final class ClientRegistrarTest extends DoctrineKernelTestCase
         self::assertInstanceOf(Client::class, $row);
         self::assertTrue($row->isConfidential());
         self::assertTrue(password_verify($response['client_secret'], (string) $row->getSecretHash()));
+    }
+
+    public function test_public_client_response_omits_client_secret_expires_at(): void
+    {
+        /** @var ClientRegistrar $registrar */
+        $registrar = self::getContainer()->get(ClientRegistrar::class);
+
+        $response = $registrar->register([
+            'redirect_uris' => ['http://localhost/cb'],
+            'grant_types' => ['authorization_code'],
+            'token_endpoint_auth_method' => 'none',
+        ]);
+
+        self::assertArrayNotHasKey('client_secret', $response);
+        self::assertArrayNotHasKey('client_secret_expires_at', $response);
     }
 }

@@ -74,6 +74,9 @@ final class ClientRegistrar
         ];
         if ($clientSecret !== null) {
             $response['client_secret'] = $clientSecret;
+            // RFC 7591 §3.2.1: REQUIRED when client_secret is issued.
+            // 0 = will not expire (this PoC has no rotation policy).
+            $response['client_secret_expires_at'] = 0;
         }
 
         return $response;
