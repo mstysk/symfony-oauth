@@ -1,5 +1,8 @@
 
 ###> symfony/framework-bundle ###
+# .env is no longer committed — copy .env.example to .env locally and
+# fill in real values (see README "Quick start").
+/.env
 /.env.local
 /.env.local.php
 /.env.*.local
