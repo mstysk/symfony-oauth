@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace App\Controller\OAuth;
 
 use App\OAuth\Server\AuthorizationServerFactory;
-use League\OAuth2\Server\Exception\OAuthServerException;
 use Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
@@ -33,11 +31,14 @@ final class AuthorizationController extends AbstractController
         $psrRequest = $this->psrFactory->createRequest($request);
         $server = $this->serverFactory->create();
 
-        try {
-            $authRequest = $server->validateAuthorizationRequest($psrRequest);
-        } catch (OAuthServerException $e) {
-            return new JsonResponse($e->getPayload(), $e->getHttpStatusCode());
-        }
+        // Let OAuthServerException bubble — OAuthExceptionListener calls
+        // $e->generateHttpResponse() which renders the right shape per
+        // RFC 6749 §4.1.2.1: 302 to redirect_uri for class-(b) errors
+        // (invalid_scope, server_error, invalid_request after redirect_uri
+        // has been validated), and JSON for class-(a) errors thrown before
+        // a usable redirect_uri is available (missing/invalid client_id,
+        // unregistered redirect_uri, missing PKCE).
+        $authRequest = $server->validateAuthorizationRequest($psrRequest);
 
         $request->getSession()->set(self::PENDING_REQUEST_KEY, $authRequest);
 

@@ -60,6 +60,28 @@ final class AuthorizationControllerTest extends WebTestCase
         self::assertSame('invalid_request', $payload['error']);
     }
 
+    public function test_invalid_scope_redirects_to_redirect_uri_with_error(): void
+    {
+        // RFC 6749 §4.1.2.1: errors after redirect_uri has been validated
+        // (here: unknown scope) MUST 302 back to redirect_uri with
+        // error=...&state=..., not return JSON on the AS origin.
+        $clientId = $this->seedClient();
+        $this->loginAsAlice();
+
+        $this->client->request('GET', sprintf(
+            '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=xyz&scope=unknown',
+            $clientId,
+            'http://localhost:8000/cb',
+            str_repeat('a', 43),
+        ));
+
+        self::assertSame(302, $this->client->getResponse()->getStatusCode());
+        $location = (string) $this->client->getResponse()->headers->get('Location');
+        self::assertStringStartsWith('http://localhost:8000/cb', $location);
+        self::assertStringContainsString('error=invalid_scope', $location);
+        self::assertStringContainsString('state=xyz', $location);
+    }
+
     public function test_valid_request_renders_consent_form_and_stashes_pending(): void
     {
         $clientId = $this->seedClient();
