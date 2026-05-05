@@ -43,4 +43,17 @@ final class AuthCodeRepository implements AuthCodeRepositoryInterface
         $code = $this->em->find(AuthCode::class, $codeId);
         return $code === null || $code->isRevoked();
     }
+
+    /**
+     * Returns the resource (RFC 8707) bound to the auth code at /authorize
+     * time, or null if no resource was ever bound. Used by
+     * ResourceIndicatorGrant at /token to enforce that the request's
+     * `resource` matches the value the user authorized.
+     */
+    public function getBoundResource(string $codeId): ?string
+    {
+        $code = $this->em->find(AuthCode::class, $codeId);
+
+        return $code?->getResource();
+    }
 }

@@ -106,6 +106,29 @@ final class TokenControllerTest extends WebTestCase
         self::assertSame('invalid_target', $body['error']);
     }
 
+    public function test_token_resource_mismatch_with_bound_value_returns_invalid_target(): void
+    {
+        // /authorize binds resource=http://localhost:8000/mcp; /token then
+        // sends a different (but allowlisted) resource — must reject.
+        $this->loginAsAlice();
+        $code = $this->runAuthorizeAndConsent(boundResource: 'http://localhost:8000/mcp');
+
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => $this->clientId,
+            'redirect_uri' => 'http://localhost:8000/cb',
+            'code_verifier' => self::CODE_VERIFIER,
+            'code' => $code,
+            // Different from the one bound at /authorize. Even if it were
+            // allowlisted, the audience must match what the user authorized.
+            'resource' => 'http://localhost:8000/different',
+        ]);
+
+        self::assertSame(400, $this->client->getResponse()->getStatusCode());
+        $body = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        self::assertSame('invalid_target', $body['error']);
+    }
+
     public function test_refresh_token_grant_issues_a_new_access_token(): void
     {
         $this->loginAsAlice();
@@ -170,18 +193,25 @@ final class TokenControllerTest extends WebTestCase
 
     /**
      * Runs GET /oauth/authorize → POST /oauth/consent (allow), returns the
-     * authorization code from the redirect.
+     * authorization code from the redirect. When `boundResource` is set, it
+     * is sent as the RFC 8707 `resource` parameter at /authorize so the
+     * AuthCode row is bound to it.
      */
-    private function runAuthorizeAndConsent(): string
+    private function runAuthorizeAndConsent(?string $boundResource = null): string
     {
         $codeChallenge = rtrim(strtr(base64_encode(hash('sha256', self::CODE_VERIFIER, true)), '+/', '-_'), '=');
 
-        $crawler = $this->client->request('GET', sprintf(
+        $authorizeUrl = sprintf(
             '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=xyz',
             $this->clientId,
             'http://localhost:8000/cb',
             $codeChallenge,
-        ));
+        );
+        if ($boundResource !== null) {
+            $authorizeUrl .= '&resource=' . urlencode($boundResource);
+        }
+
+        $crawler = $this->client->request('GET', $authorizeUrl);
         if ($this->client->getResponse()->getStatusCode() !== 200) {
             self::fail('Authorize step failed: ' . $this->client->getResponse()->getStatusCode());
         }

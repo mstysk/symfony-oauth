@@ -60,6 +60,47 @@ final class AuthorizationControllerTest extends WebTestCase
         self::assertSame('invalid_request', $payload['error']);
     }
 
+    public function test_authorize_with_resource_outside_allowlist_redirects_with_invalid_target(): void
+    {
+        $clientId = $this->seedClient();
+        $this->loginAsAlice();
+
+        $this->client->request('GET', sprintf(
+            '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=xyz&resource=%s',
+            $clientId,
+            'http://localhost:8000/cb',
+            str_repeat('a', 43),
+            urlencode('http://localhost:8000/other'),
+        ));
+
+        self::assertSame(302, $this->client->getResponse()->getStatusCode());
+        $location = (string) $this->client->getResponse()->headers->get('Location');
+        self::assertStringStartsWith('http://localhost:8000/cb', $location);
+        self::assertStringContainsString('error=invalid_target', $location);
+        self::assertStringContainsString('state=xyz', $location);
+    }
+
+    public function test_authorize_binds_resource_to_authorization_request(): void
+    {
+        $clientId = $this->seedClient();
+        $this->loginAsAlice();
+
+        $this->client->request('GET', sprintf(
+            '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=xyz&resource=%s',
+            $clientId,
+            'http://localhost:8000/cb',
+            str_repeat('a', 43),
+            urlencode('http://localhost:8000/mcp'),
+        ));
+
+        self::assertSame(200, $this->client->getResponse()->getStatusCode());
+
+        $session = $this->client->getRequest()->getSession();
+        $authRequest = $session->get(AuthorizationController::PENDING_REQUEST_KEY);
+        self::assertInstanceOf(\App\OAuth\Extension\AuthorizationRequest::class, $authRequest);
+        self::assertSame('http://localhost:8000/mcp', $authRequest->getResource());
+    }
+
     public function test_invalid_scope_redirects_to_redirect_uri_with_error(): void
     {
         // RFC 6749 §4.1.2.1: errors after redirect_uri has been validated

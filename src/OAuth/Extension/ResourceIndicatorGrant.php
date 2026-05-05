@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace App\OAuth\Extension;
 
+use App\OAuth\Entity\AuthCode as AuthCodeEntity;
+use App\OAuth\Repository\AuthCodeRepository;
 use DateInterval;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
+use League\OAuth2\Server\Entities\AuthCodeEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use League\OAuth2\Server\Grant\AuthCodeGrant;
 use League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface;
 use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
-use League\OAuth2\Server\RequestAccessTokenEvent;
-use League\OAuth2\Server\RequestEvent;
-use League\OAuth2\Server\RequestRefreshTokenEvent;
 use League\OAuth2\Server\RequestTypes\AuthorizationRequestInterface;
 use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -22,14 +22,17 @@ use Psr\Http\Message\ServerRequestInterface;
  * AuthorizationCodeGrant + MCP-spec invariants:
  *   - PKCE (S256) is required for ALL clients (including confidential),
  *     overriding league's per-client default.
- *   - RFC 8707 `resource` parameter is required at the token endpoint;
- *     value must match an entry in MCP_ALLOWED_RESOURCES (exact-match).
+ *   - RFC 8707 `resource` is read at /authorize (optional, validated and
+ *     bound to the auth code) and required at /token; if a resource
+ *     was bound at /authorize, the /token request MUST match it
+ *     (audience-confused-deputy defense per §2.2).
  *   - The validated resource is propagated into the access token's
  *     `aud` claim via McpAccessTokenEntity::setAudiences().
  */
 final class ResourceIndicatorGrant extends AuthCodeGrant
 {
     private ?string $pendingResource = null;
+    private ?string $pendingCodeResource = null;
 
     public function __construct(
         AuthCodeRepositoryInterface $authCodeRepository,
@@ -38,6 +41,11 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         private readonly AllowedResources $allowedResources,
     ) {
         parent::__construct($authCodeRepository, $refreshTokenRepository, $authCodeTTL);
+    }
+
+    protected function createAuthorizationRequest(): AuthorizationRequestInterface
+    {
+        return new AuthorizationRequest();
     }
 
     public function validateAuthorizationRequest(ServerRequestInterface $request): AuthorizationRequestInterface
@@ -55,7 +63,94 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
             );
         }
 
-        return parent::validateAuthorizationRequest($request);
+        $authRequest = parent::validateAuthorizationRequest($request);
+
+        // RFC 8707: `resource` is optional at /authorize. If supplied, it
+        // must be in the allowlist and use a safe scheme. We bind it onto
+        // the auth code at completion time (issueAuthCode) so the matching
+        // check at /token has something to compare to.
+        $resource = $this->getQueryStringParameter('resource', $request);
+        if ($resource !== null) {
+            // redirect_uri has been validated by parent — invalid_target
+            // here is RFC 6749 §4.1.2.1 class-(b), which means we 302 back
+            // to the client with error=invalid_target instead of JSON.
+            $redirectWithState = $this->makeRedirectUri(
+                $authRequest->getRedirectUri() ?? $this->getClientRedirectUri($authRequest->getClient()),
+                $authRequest->getState() !== null ? ['state' => $authRequest->getState()] : [],
+            );
+
+            if (!self::isAcceptableResourceScheme($resource)) {
+                throw $this->invalidTarget('resource scheme must be https (or http://localhost)', $redirectWithState);
+            }
+            if (!$this->allowedResources->contains($resource)) {
+                throw $this->invalidTarget('resource not allowed', $redirectWithState);
+            }
+            if ($authRequest instanceof AuthorizationRequest) {
+                $authRequest->setResource($resource);
+            }
+        }
+
+        return $authRequest;
+    }
+
+    public function completeAuthorizationRequest(AuthorizationRequestInterface $authorizationRequest): ResponseTypeInterface
+    {
+        if ($authorizationRequest instanceof AuthorizationRequest) {
+            $this->pendingCodeResource = $authorizationRequest->getResource();
+        }
+
+        try {
+            return parent::completeAuthorizationRequest($authorizationRequest);
+        } finally {
+            $this->pendingCodeResource = null;
+        }
+    }
+
+    /**
+     * Override to bind the resource onto the AuthCode entity before
+     * persistNewAuthCode flushes — replicates parent's loop with the
+     * single extra setResource() call.
+     *
+     * @param non-empty-string $userIdentifier
+     * @param \League\OAuth2\Server\Entities\ScopeEntityInterface[] $scopes
+     */
+    protected function issueAuthCode(
+        DateInterval $authCodeTTL,
+        ClientEntityInterface $client,
+        string $userIdentifier,
+        ?string $redirectUri,
+        array $scopes = [],
+    ): AuthCodeEntityInterface {
+        $authCode = $this->authCodeRepository->getNewAuthCode();
+        $authCode->setExpiryDateTime((new \DateTimeImmutable())->add($authCodeTTL));
+        $authCode->setClient($client);
+        $authCode->setUserIdentifier($userIdentifier);
+        if ($redirectUri !== null) {
+            $authCode->setRedirectUri($redirectUri);
+        }
+        foreach ($scopes as $scope) {
+            $authCode->addScope($scope);
+        }
+
+        if ($this->pendingCodeResource !== null && $authCode instanceof AuthCodeEntity) {
+            $authCode->setResource($this->pendingCodeResource);
+        }
+
+        $maxAttempts = self::MAX_RANDOM_TOKEN_GENERATION_ATTEMPTS;
+        while ($maxAttempts-- > 0) {
+            $authCode->setIdentifier($this->generateUniqueIdentifier());
+            try {
+                $this->authCodeRepository->persistNewAuthCode($authCode);
+
+                return $authCode;
+            } catch (\League\OAuth2\Server\Exception\UniqueTokenIdentifierConstraintViolationException $e) {
+                if ($maxAttempts === 0) {
+                    throw $e;
+                }
+            }
+        }
+
+        return $authCode;
     }
 
     public function respondToAccessTokenRequest(
@@ -76,6 +171,10 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         if (!$this->allowedResources->contains($resource)) {
             throw $this->invalidTarget('resource not allowed');
         }
+
+        // RFC 8707 §2.2 — if /authorize bound a resource onto the auth code,
+        // the /token request must specify the same resource.
+        $this->assertBoundResourceMatches($request, $resource);
 
         $this->pendingResource = $resource;
 
@@ -124,6 +223,44 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         return $accessToken;
     }
 
+    /**
+     * Decrypt the auth code from the request body, look up the AuthCode
+     * row, and assert any bound resource matches the /token request.
+     */
+    private function assertBoundResourceMatches(ServerRequestInterface $request, string $requestResource): void
+    {
+        if (!$this->authCodeRepository instanceof AuthCodeRepository) {
+            return; // can't enforce without our concrete repo
+        }
+
+        $encryptedCode = $this->getRequestParameter('code', $request);
+        if ($encryptedCode === null) {
+            return; // parent will reject with invalid_request
+        }
+
+        try {
+            $payload = json_decode($this->decrypt($encryptedCode));
+        } catch (\Throwable) {
+            return; // parent's validateAuthorizationCode will handle the bad payload
+        }
+
+        if (!\is_object($payload) || !isset($payload->auth_code_id)) {
+            return;
+        }
+
+        $boundResource = $this->authCodeRepository->getBoundResource((string) $payload->auth_code_id);
+        if ($boundResource === null) {
+            return; // /authorize did not bind a resource — /token-side check is sufficient
+        }
+
+        if ($boundResource !== $requestResource) {
+            throw $this->invalidTarget(sprintf(
+                'resource %s does not match the value bound to the authorization code',
+                $requestResource,
+            ));
+        }
+    }
+
     private static function isAcceptableResourceScheme(string $resource): bool
     {
         $parts = parse_url($resource);
@@ -138,20 +275,18 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
             return true;
         }
 
-        // http is only acceptable for localhost development.
         return $scheme === 'http' && \in_array($host, ['localhost', '127.0.0.1', '::1'], true);
     }
 
-    private function invalidTarget(string $hint): OAuthServerException
+    private function invalidTarget(string $hint, ?string $redirectUri = null): OAuthServerException
     {
-        // RFC 8707 §3 — error code "invalid_target", HTTP 400.
-        // league/oauth2-server has no factory for this so we build it directly.
         return new OAuthServerException(
             'The requested resource is invalid, missing, unknown, or malformed',
             8,
             'invalid_target',
             400,
             $hint,
+            $redirectUri,
         );
     }
 }
