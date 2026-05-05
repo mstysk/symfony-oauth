@@ -37,15 +37,18 @@ jobs:
           key: ${{ runner.os }}-php${{ matrix.php }}-composer-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ matrix.php }}-composer-
 
+      - name: Bootstrap .env from example
+        # .env is gitignored (we never commit real secrets). CI seeds
+        # it BEFORE composer install because the @auto-scripts
+        # post-install hook runs cache:clear, which boots the kernel
+        # and Dotenv::bootEnv() requires .env to exist. .env.example
+        # holds dev defaults; OAUTH_ENCRYPTION_KEY in .env.test is the
+        # GENERATE_AT_RUNTIME sentinel that tests/bootstrap.php swaps
+        # for a freshly-generated defuse key.
+        run: cp .env.example .env
+
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress --no-interaction
-
-      - name: Bootstrap .env from example
-        # .env is gitignored (we never commit real secrets); CI seeds it
-        # from the committed template so Symfony's Dotenv can load it.
-        # OAUTH_ENCRYPTION_KEY in .env.test is GENERATE_AT_RUNTIME, which
-        # tests/bootstrap.php swaps for a freshly-generated defuse key.
-        run: cp .env.example .env
 
       - name: Verify Doctrine entity mapping
         run: php bin/console doctrine:mapping:info --env=test
