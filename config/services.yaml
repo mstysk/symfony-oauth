@@ -36,7 +36,7 @@ services:
     App\OAuth\Repository\AccessTokenRepository:
         arguments:
             $issuer: '%env(OAUTH_ISSUER)%'
-            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
     # league/oauth2-server interface -> App impl aliases (so autowire can
     # resolve them in ResourceIndicatorGrant and AuthorizationServerFactory).
@@ -68,11 +68,11 @@ services:
 
     App\OAuth\Extension\KidDeriver:
         arguments:
-            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
     App\Controller\WellKnown\JwksController:
         arguments:
-            $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
         tags: ['controller.service_arguments']
 
     App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
@@ -95,7 +95,7 @@ services:
     # AuthorizationServer needs at construction time.
     App\OAuth\Server\AuthorizationServerFactory:
         arguments:
-            $privateKeyPath: '%env(OAUTH_PRIVATE_KEY_PATH)%'
+            $privateKeyPath: '%env(resolve:OAUTH_PRIVATE_KEY_PATH)%'
             $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
             $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
             $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'
@@ -132,7 +132,7 @@ when@test:
         App\OAuth\Repository\AccessTokenRepository:
             arguments:
                 $issuer: '%env(OAUTH_ISSUER)%'
-                $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+                $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
         # league interface aliases (test resource pattern overrides the dev
         # ones, so re-declare here).
@@ -161,7 +161,7 @@ when@test:
 
         App\OAuth\Extension\KidDeriver:
             arguments:
-                $publicKeyPath: '%env(OAUTH_PUBLIC_KEY_PATH)%'
+                $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
         App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
             arguments:
@@ -169,7 +169,7 @@ when@test:
 
         App\OAuth\Server\AuthorizationServerFactory:
             arguments:
-                $privateKeyPath: '%env(OAUTH_PRIVATE_KEY_PATH)%'
+                $privateKeyPath: '%env(resolve:OAUTH_PRIVATE_KEY_PATH)%'
                 $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
                 $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
                 $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'
