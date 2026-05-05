@@ -64,8 +64,21 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
     public function isRefreshTokenRevoked(string $tokenId): bool
     {
         $row = $this->em->find(RefreshToken::class, $tokenId);
+        if ($row === null) {
+            return true;
+        }
 
-        return $row === null || $row->isRevoked();
+        if ($row->isRevoked()) {
+            // RFC 9700 §4.14 — a revoked refresh token presented for
+            // exchange is the canonical reuse signal. Revoke the whole
+            // family so any sibling token (legitimately rotated to, or
+            // a parallel attacker's rotation) is killed too.
+            $this->revokeFamily($row->getFamilyId());
+
+            return true;
+        }
+
+        return false;
     }
 
     private function revokeFamily(Uuid $familyId): void

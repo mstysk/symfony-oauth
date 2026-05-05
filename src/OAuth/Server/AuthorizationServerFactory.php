@@ -4,15 +4,14 @@ declare(strict_types=1);
 
 namespace App\OAuth\Server;
 
+use App\OAuth\Extension\FamilyAwareRefreshTokenGrant;
 use App\OAuth\Extension\ResourceIndicatorGrant;
 use App\OAuth\Repository\AccessTokenRepository;
 use App\OAuth\Repository\ClientRepository;
-use App\OAuth\Repository\RefreshTokenRepository;
 use App\OAuth\Repository\ScopeRepository;
 use Defuse\Crypto\Key;
 use League\OAuth2\Server\AuthorizationServer;
 use League\OAuth2\Server\CryptKey;
-use League\OAuth2\Server\Grant\RefreshTokenGrant;
 
 /**
  * Wires the league AuthorizationServer with our repos and the
@@ -25,8 +24,8 @@ final class AuthorizationServerFactory
         private readonly ClientRepository $clientRepository,
         private readonly AccessTokenRepository $accessTokenRepository,
         private readonly ScopeRepository $scopeRepository,
-        private readonly RefreshTokenRepository $refreshTokenRepository,
         private readonly ResourceIndicatorGrant $resourceIndicatorGrant,
+        private readonly FamilyAwareRefreshTokenGrant $refreshTokenGrant,
         private readonly string $privateKeyPath,
         private readonly string $encryptionKey,
         private readonly string $accessTokenTtl,
@@ -59,12 +58,12 @@ final class AuthorizationServerFactory
         $server->enableGrantType($this->resourceIndicatorGrant, $accessTokenTtl);
 
         // Refresh token grant — exchanges a still-valid refresh_token for a
-        // new access_token (+ rotated refresh_token). Without this, every
-        // /oauth/token request with grant_type=refresh_token would fall
-        // through league's grant loop and be rejected as unsupported.
-        $refreshTokenGrant = new RefreshTokenGrant($this->refreshTokenRepository);
-        $refreshTokenGrant->setRefreshTokenTTL($refreshTokenTtl);
-        $server->enableGrantType($refreshTokenGrant, $accessTokenTtl);
+        // new access_token (+ rotated refresh_token). Our subclass
+        // propagates the family_id from the old refresh token onto the
+        // new one so RFC 9700 §4.14 reuse detection can revoke the
+        // entire family on replay.
+        $this->refreshTokenGrant->setRefreshTokenTTL($refreshTokenTtl);
+        $server->enableGrantType($this->refreshTokenGrant, $accessTokenTtl);
 
         return $server;
     }

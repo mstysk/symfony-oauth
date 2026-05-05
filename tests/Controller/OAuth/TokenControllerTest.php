@@ -164,6 +164,71 @@ final class TokenControllerTest extends WebTestCase
         self::assertArrayHasKey('access_token', $second);
         self::assertNotSame($first['access_token'], $second['access_token']);
         self::assertArrayHasKey('refresh_token', $second);
+
+        // family_id is preserved across rotation: every persisted RT row
+        // shares the same family.
+        $em = self::getContainer()->get(\Doctrine\ORM\EntityManagerInterface::class);
+        $rows = $em->getRepository(\App\OAuth\Entity\RefreshToken::class)->findAll();
+        self::assertGreaterThanOrEqual(2, \count($rows));
+        $familyIds = array_unique(array_map(
+            static fn (\App\OAuth\Entity\RefreshToken $r): string => $r->getFamilyId()->toRfc4122(),
+            $rows,
+        ));
+        self::assertCount(1, $familyIds, 'all rotated refresh tokens must share one family_id');
+    }
+
+    public function test_refresh_token_reuse_kills_the_legitimate_chain(): void
+    {
+        // RFC 9700 §4.14: an attacker who replays a stolen-but-rotated
+        // refresh token should also kill the legitimate user's still-
+        // active refresh token in the same family.
+        $this->loginAsAlice();
+        $code = $this->runAuthorizeAndConsent();
+
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => $this->clientId,
+            'redirect_uri' => 'http://localhost:8000/cb',
+            'code_verifier' => self::CODE_VERIFIER,
+            'code' => $code,
+            'resource' => 'http://localhost:8000/mcp',
+        ]);
+        $initial = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        $rt1 = $initial['refresh_token'];
+
+        // Legit rotation: rt1 → rt2.
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => $this->clientId,
+            'refresh_token' => $rt1,
+        ]);
+        $rotated = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        $rt2 = $rotated['refresh_token'];
+        self::assertNotSame($rt1, $rt2);
+
+        // Attacker presents rt1 (already revoked) — must fail AND poison
+        // the family so rt2 stops working.
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => $this->clientId,
+            'refresh_token' => $rt1,
+        ]);
+        self::assertSame(400, $this->client->getResponse()->getStatusCode());
+
+        // Legitimate user now tries to use rt2 — should be rejected
+        // because the reuse signal revoked the whole family.
+        $this->client->request('POST', '/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => $this->clientId,
+            'refresh_token' => $rt2,
+        ]);
+        self::assertSame(
+            400,
+            $this->client->getResponse()->getStatusCode(),
+            'rt2 should be revoked after rt1 reuse fired family revocation; got: ' . (string) $this->client->getResponse()->getContent(),
+        );
+        $body = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        self::assertSame('invalid_grant', $body['error']);
     }
 
     private function seedClient(): string

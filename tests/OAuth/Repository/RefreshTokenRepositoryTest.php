@@ -82,8 +82,12 @@ final class RefreshTokenRepositoryTest extends DoctrineKernelTestCase
         self::assertNotEmpty($row->getFamilyId()->toRfc4122());
     }
 
-    public function test_reuse_detection_revokes_entire_family(): void
+    public function test_reuse_detection_revokes_entire_family_via_is_revoked_check(): void
     {
+        // RFC 9700 §4.14: presenting an already-revoked refresh token is
+        // the reuse signal. League's RefreshTokenGrant calls
+        // isRefreshTokenRevoked() during validation, so that's where we
+        // hook the family-wide revocation.
         /** @var RefreshTokenRepository $repo */
         $repo = self::getContainer()->get(RefreshTokenRepository::class);
 
@@ -92,14 +96,19 @@ final class RefreshTokenRepositoryTest extends DoctrineKernelTestCase
         $this->em->persist(new RefreshToken('rt-new', 'jti-2', $familyId, new \DateTimeImmutable('+30 days')));
         $this->em->flush();
 
-        // First revoke: just rt-old.
+        // Legitimate revoke of rt-old — rt-new (the rotated successor)
+        // stays alive.
         $repo->revokeRefreshToken('rt-old');
-        self::assertTrue($repo->isRefreshTokenRevoked('rt-old'));
-        self::assertFalse($repo->isRefreshTokenRevoked('rt-new'));
+        $this->em->clear();
+        $rtNew = $this->em->find(RefreshToken::class, 'rt-new');
+        self::assertFalse($rtNew->isRevoked());
 
-        // Second call on the same already-revoked token = reuse → revoke whole family.
-        $repo->revokeRefreshToken('rt-old');
+        // Attacker presents rt-old (already revoked) — isRefreshTokenRevoked
+        // detects the reuse and revokes every member of the family.
         self::assertTrue($repo->isRefreshTokenRevoked('rt-old'));
-        self::assertTrue($repo->isRefreshTokenRevoked('rt-new'));
+
+        $this->em->clear();
+        self::assertTrue($this->em->find(RefreshToken::class, 'rt-old')->isRevoked());
+        self::assertTrue($this->em->find(RefreshToken::class, 'rt-new')->isRevoked());
     }
 }

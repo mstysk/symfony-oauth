@@ -10,6 +10,7 @@ use DateInterval;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\AuthCodeEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
+use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use League\OAuth2\Server\Grant\AuthCodeGrant;
 use League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface;
@@ -17,6 +18,7 @@ use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use League\OAuth2\Server\RequestTypes\AuthorizationRequestInterface;
 use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Symfony\Component\Uid\Uuid;
 
 /**
  * AuthorizationCodeGrant + MCP-spec invariants:
@@ -221,6 +223,47 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         }
 
         return $accessToken;
+    }
+
+    /**
+     * Override to start a fresh refresh-token family on initial issuance
+     * (the auth-code → token leg). Subsequent rotations are handled by
+     * FamilyAwareRefreshTokenGrant, which inherits the family_id from the
+     * old refresh token.
+     */
+    protected function issueRefreshToken(AccessTokenEntityInterface $accessToken): ?RefreshTokenEntityInterface
+    {
+        if (!$this->supportsGrantType($accessToken->getClient(), 'refresh_token')) {
+            return null;
+        }
+
+        $refreshToken = $this->refreshTokenRepository->getNewRefreshToken();
+        if ($refreshToken === null) {
+            return null;
+        }
+
+        $refreshToken->setExpiryDateTime((new \DateTimeImmutable())->add($this->refreshTokenTTL));
+        $refreshToken->setAccessToken($accessToken);
+
+        if ($refreshToken instanceof SimpleRefreshTokenEntity && $refreshToken->getFamilyId() === null) {
+            $refreshToken->setFamilyId(Uuid::v7());
+        }
+
+        $maxAttempts = self::MAX_RANDOM_TOKEN_GENERATION_ATTEMPTS;
+        while ($maxAttempts-- > 0) {
+            $refreshToken->setIdentifier($this->generateUniqueIdentifier());
+            try {
+                $this->refreshTokenRepository->persistNewRefreshToken($refreshToken);
+
+                return $refreshToken;
+            } catch (\League\OAuth2\Server\Exception\UniqueTokenIdentifierConstraintViolationException $e) {
+                if ($maxAttempts === 0) {
+                    throw $e;
+                }
+            }
+        }
+
+        return $refreshToken;
     }
 
     /**
