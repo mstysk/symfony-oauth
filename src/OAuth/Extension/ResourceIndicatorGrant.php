@@ -18,6 +18,8 @@ use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use League\OAuth2\Server\RequestTypes\AuthorizationRequestInterface;
 use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Component\Uid\Uuid;
 
 /**
@@ -41,6 +43,7 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         RefreshTokenRepositoryInterface $refreshTokenRepository,
         DateInterval $authCodeTTL,
         private readonly AllowedResources $allowedResources,
+        private readonly LoggerInterface $logger = new NullLogger(),
     ) {
         parent::__construct($authCodeRepository, $refreshTokenRepository, $authCodeTTL);
     }
@@ -283,8 +286,17 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
 
         try {
             $payload = json_decode($this->decrypt($encryptedCode));
-        } catch (\Throwable) {
-            return; // parent's validateAuthorizationCode will handle the bad payload
+        } catch (\Throwable $e) {
+            // parent's validateAuthorizationCode will surface this to the
+            // client as invalid_grant. Log so the production triage path
+            // can distinguish a bad-input attempt from a misconfiguration
+            // (e.g. encryption-key rotation that broke decrypt).
+            $this->logger->warning('Failed to decrypt authorization code while checking bound resource', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+
+            return;
         }
 
         if (!\is_object($payload) || !isset($payload->auth_code_id)) {
@@ -304,7 +316,7 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
         }
     }
 
-    private static function isAcceptableResourceScheme(string $resource): bool
+    public static function isAcceptableResourceScheme(string $resource): bool
     {
         $parts = parse_url($resource);
         if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
@@ -313,6 +325,12 @@ final class ResourceIndicatorGrant extends AuthCodeGrant
 
         $scheme = strtolower($parts['scheme']);
         $host = strtolower($parts['host']);
+
+        // parse_url returns IPv6 hosts wrapped in square brackets ('[::1]').
+        // Strip them before comparing against the localhost allowlist.
+        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
+            $host = substr($host, 1, -1);
+        }
 
         if ($scheme === 'https') {
             return true;

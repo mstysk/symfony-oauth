@@ -10,6 +10,7 @@ use League\OAuth2\Server\Exception\OAuthServerException;
 use League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface;
 use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ServerRequestInterface;
 
@@ -63,6 +64,29 @@ final class ResourceIndicatorGrantTest extends TestCase
             $this->createStub(ResponseTypeInterface::class),
             new \DateInterval('PT1H'),
         ));
+    }
+
+    #[DataProvider('acceptable_scheme_cases')]
+    public function test_acceptable_resource_scheme(string $resource, bool $expected): void
+    {
+        self::assertSame($expected, ResourceIndicatorGrant::isAcceptableResourceScheme($resource));
+    }
+
+    public static function acceptable_scheme_cases(): iterable
+    {
+        // https — always OK.
+        yield 'https any host' => ['https://api.example/mcp', true];
+        // http — only localhost variants.
+        yield 'http localhost' => ['http://localhost:8000/mcp', true];
+        yield 'http 127.0.0.1' => ['http://127.0.0.1:8000/mcp', true];
+        // IPv6 localhost — parse_url returns "[::1]"; the helper must
+        // strip the brackets before comparing to the allowlist.
+        yield 'http [::1]' => ['http://[::1]:8000/mcp', true];
+        // http on non-localhost — rejected.
+        yield 'http example' => ['http://example.com/mcp', false];
+        // bad shape.
+        yield 'no scheme' => ['/relative', false];
+        yield 'garbage' => ['not a url', false];
     }
 
     public function test_token_request_with_disallowed_scheme_throws_invalid_target(): void

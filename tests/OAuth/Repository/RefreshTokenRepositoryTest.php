@@ -63,23 +63,23 @@ final class RefreshTokenRepositoryTest extends DoctrineKernelTestCase
         self::assertSame('jti-1', $row->getAccessTokenId());
     }
 
-    public function test_persist_new_refresh_token_generates_family_id_when_unset(): void
+    public function test_persist_throws_when_family_id_not_set(): void
     {
+        // The repository now refuses to silently fall back to a fresh
+        // family_id (would break RFC 9700 §4.14 reuse detection). Grants
+        // are responsible for stamping it on; failure to do so is a bug.
         /** @var RefreshTokenRepository $repo */
         $repo = self::getContainer()->get(RefreshTokenRepository::class);
 
         $entity = $repo->getNewRefreshToken();
         \assert($entity instanceof SimpleRefreshTokenEntity);
-        $entity->setIdentifier('rt-fresh');
+        $entity->setIdentifier('rt-bad');
         $entity->setExpiryDateTime(new \DateTimeImmutable('+30 days'));
         $entity->setAccessToken(new StubAccessToken('jti-1'));
 
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('family_id');
         $repo->persistNewRefreshToken($entity);
-
-        $row = $this->em->find(RefreshToken::class, 'rt-fresh');
-        self::assertNotNull($row);
-        // family_id was generated; it is a non-empty UUID.
-        self::assertNotEmpty($row->getFamilyId()->toRfc4122());
     }
 
     public function test_reuse_detection_revokes_entire_family_via_is_revoked_check(): void

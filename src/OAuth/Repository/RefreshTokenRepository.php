@@ -32,10 +32,24 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
             ));
         }
 
+        // family_id MUST be set explicitly by the grant
+        // (ResourceIndicatorGrant for first-issuance, FamilyAwareRefreshTokenGrant
+        // for rotation). If a future grant forgets to call setFamilyId(), we
+        // surface the bug instead of silently starting a fresh chain — that
+        // would break RFC 9700 §4.14 reuse detection without anyone noticing.
+        $familyId = $refreshTokenEntity->getFamilyId();
+        if ($familyId === null) {
+            throw new \LogicException(sprintf(
+                '%s expected family_id to be set by the grant before persistNewRefreshToken; ' .
+                'see ResourceIndicatorGrant::issueRefreshToken / FamilyAwareRefreshTokenGrant::issueRefreshToken.',
+                SimpleRefreshTokenEntity::class,
+            ));
+        }
+
         $row = new RefreshToken(
             identifier: $refreshTokenEntity->getIdentifier(),
             accessTokenId: $refreshTokenEntity->getAccessToken()->getIdentifier(),
-            familyId: $refreshTokenEntity->getFamilyId() ?? Uuid::v7(),
+            familyId: $familyId,
             expiresAt: $refreshTokenEntity->getExpiryDateTime(),
         );
 
@@ -63,6 +77,16 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
 
     public function isRefreshTokenRevoked(string $tokenId): bool
     {
+        // NOTE: side-effect-on-query. League calls this method during
+        // refresh-token validation, which is the only safe hook to fire
+        // family revocation when a revoked token is replayed. Renaming
+        // to is_revoked_or_revoke_family() would be more honest but
+        // would also require a custom interface; leave as-is.
+        //
+        // TODO (post-PoC): wrap the find/revoke pair in SELECT ... FOR
+        // UPDATE so two parallel rotations on the same row can't both
+        // see "not revoked" and produce a duplicate family branch.
+        // RFC 9700 §4.14 acknowledges races; this is a hardening item.
         $row = $this->em->find(RefreshToken::class, $tokenId);
         if ($row === null) {
             return true;
