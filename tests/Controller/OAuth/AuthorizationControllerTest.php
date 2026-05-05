@@ -96,7 +96,7 @@ final class AuthorizationControllerTest extends WebTestCase
         self::assertSame(200, $this->client->getResponse()->getStatusCode());
 
         $session = $this->client->getRequest()->getSession();
-        $authRequest = $session->get(AuthorizationController::PENDING_REQUEST_KEY);
+        $authRequest = $this->extractPendingRequest($session);
         self::assertInstanceOf(\App\OAuth\Extension\AuthorizationRequest::class, $authRequest);
         self::assertSame('http://localhost:8000/mcp', $authRequest->getResource());
     }
@@ -138,9 +138,61 @@ final class AuthorizationControllerTest extends WebTestCase
         self::assertSame(200, $this->client->getResponse()->getStatusCode());
         self::assertGreaterThan(0, $crawler->filter('button[name="decision"]')->count());
 
-        // Pending request stashed in session for the consent endpoint to consume.
+        // Form carries the request_id minted at /authorize.
+        $requestIdInput = $crawler->filter('input[name="request_id"]');
+        self::assertCount(1, $requestIdInput);
+        $requestId = (string) $requestIdInput->attr('value');
+        self::assertNotEmpty($requestId);
+
+        // Pending request stashed in session under the per-request key.
         $session = $this->client->getRequest()->getSession();
-        self::assertNotNull($session->get(AuthorizationController::PENDING_REQUEST_KEY));
+        self::assertNotNull($session->get(AuthorizationController::SESSION_KEY_PREFIX . $requestId));
+    }
+
+    public function test_second_authorize_does_not_overwrite_first(): void
+    {
+        // Confused-deputy defense: a second /authorize that arrives in
+        // the same session must not blow away the pending entry the user
+        // is currently looking at.
+        $clientId = $this->seedClient();
+        $this->loginAsAlice();
+
+        $crawler1 = $this->client->request('GET', sprintf(
+            '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=first',
+            $clientId,
+            'http://localhost:8000/cb',
+            str_repeat('a', 43),
+        ));
+        $firstId = (string) $crawler1->filter('input[name="request_id"]')->attr('value');
+
+        $crawler2 = $this->client->request('GET', sprintf(
+            '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=second',
+            $clientId,
+            'http://localhost:8000/cb',
+            str_repeat('b', 43),
+        ));
+        $secondId = (string) $crawler2->filter('input[name="request_id"]')->attr('value');
+
+        self::assertNotSame($firstId, $secondId, 'Each /authorize must mint a fresh request_id');
+
+        $session = $this->client->getRequest()->getSession();
+        self::assertNotNull($session->get(AuthorizationController::SESSION_KEY_PREFIX . $firstId));
+        self::assertNotNull($session->get(AuthorizationController::SESSION_KEY_PREFIX . $secondId));
+    }
+
+    /**
+     * Test helper: pulls whichever pending AuthorizationRequest is in
+     * session (assumes there's exactly one).
+     */
+    private function extractPendingRequest(\Symfony\Component\HttpFoundation\Session\SessionInterface $session): mixed
+    {
+        foreach ($session->all() as $key => $value) {
+            if (str_starts_with((string) $key, AuthorizationController::SESSION_KEY_PREFIX)) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     private function seedClient(): string

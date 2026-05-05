@@ -10,10 +10,21 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Uid\Uuid;
 
 final class AuthorizationController extends AbstractController
 {
-    public const PENDING_REQUEST_KEY = 'oauth.pending_authorization_request';
+    /**
+     * Session-key prefix for pending AuthorizationRequest entries. Each
+     * /authorize call mints a unique request_id and stashes the request
+     * under "oauth.pending.<request_id>", which is also embedded as a
+     * hidden field in the consent form. The POST-side (ConsentController)
+     * pulls the entry by exactly that id, so a second /authorize that
+     * arrives in the same session under a different client_id does NOT
+     * overwrite the entry the user is currently looking at.
+     */
+    public const SESSION_KEY_PREFIX = 'oauth.pending.';
+    public const REQUEST_ID_PARAM = 'request_id';
 
     public function __construct(
         private readonly AuthorizationServerFactory $serverFactory,
@@ -31,18 +42,13 @@ final class AuthorizationController extends AbstractController
         $psrRequest = $this->psrFactory->createRequest($request);
         $server = $this->serverFactory->create();
 
-        // Let OAuthServerException bubble — OAuthExceptionListener calls
-        // $e->generateHttpResponse() which renders the right shape per
-        // RFC 6749 §4.1.2.1: 302 to redirect_uri for class-(b) errors
-        // (invalid_scope, server_error, invalid_request after redirect_uri
-        // has been validated), and JSON for class-(a) errors thrown before
-        // a usable redirect_uri is available (missing/invalid client_id,
-        // unregistered redirect_uri, missing PKCE).
         $authRequest = $server->validateAuthorizationRequest($psrRequest);
 
-        $request->getSession()->set(self::PENDING_REQUEST_KEY, $authRequest);
+        $requestId = Uuid::v7()->toRfc4122();
+        $request->getSession()->set(self::SESSION_KEY_PREFIX . $requestId, $authRequest);
 
         return $this->render('oauth/consent.html.twig', [
+            'request_id' => $requestId,
             'client_name' => $authRequest->getClient()->getName(),
             'scopes' => array_map(
                 static fn ($scope) => $scope->getIdentifier(),

@@ -45,9 +45,23 @@ final class ConsentController extends AbstractController
             );
         }
 
+        // Look up the pending request by the request_id embedded in the
+        // form. This binds the POST to the specific /authorize that
+        // rendered it, so a second /authorize that arrives in the same
+        // session under a different client cannot silently swap which
+        // request the user "consents" to.
+        $requestId = (string) $request->request->get(AuthorizationController::REQUEST_ID_PARAM, '');
+        if ($requestId === '' || !preg_match('/^[a-f0-9-]{36}$/i', $requestId)) {
+            return new JsonResponse(
+                ['error' => 'invalid_request', 'error_description' => 'Missing or malformed request_id'],
+                400,
+            );
+        }
+
         $session = $request->getSession();
-        $authRequest = $session->get(AuthorizationController::PENDING_REQUEST_KEY);
-        $session->remove(AuthorizationController::PENDING_REQUEST_KEY);
+        $sessionKey = AuthorizationController::SESSION_KEY_PREFIX . $requestId;
+        $authRequest = $session->get($sessionKey);
+        $session->remove($sessionKey);
 
         if (!$authRequest instanceof AuthorizationRequestInterface) {
             return new JsonResponse(

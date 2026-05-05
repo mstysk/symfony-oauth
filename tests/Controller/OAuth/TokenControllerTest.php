@@ -217,9 +217,11 @@ final class TokenControllerTest extends WebTestCase
         }
 
         $token = (string) $crawler->filter('input[name="_token"]')->attr('value');
+        $requestId = (string) $crawler->filter('input[name="request_id"]')->attr('value');
 
         $this->client->request('POST', '/oauth/consent', [
             '_token' => $token,
+            'request_id' => $requestId,
             'decision' => 'allow',
         ]);
         if ($this->client->getResponse()->getStatusCode() !== 302) {

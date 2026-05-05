@@ -51,20 +51,33 @@ final class ConsentControllerTest extends WebTestCase
         self::assertSame('invalid_request', $payload['error']);
     }
 
+    public function test_missing_request_id_returns_400(): void
+    {
+        $this->loginAsAlice();
+        $form = $this->primePendingRequestForm();
+
+        $this->client->request('POST', '/oauth/consent', [
+            '_token' => $form['_token'],
+            'decision' => 'allow',
+            // request_id intentionally omitted
+        ]);
+
+        self::assertSame(400, $this->client->getResponse()->getStatusCode());
+        $payload = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
+        self::assertSame('invalid_request', $payload['error']);
+    }
+
     public function test_no_pending_request_returns_400(): void
     {
         $this->loginAsAlice();
-        $token = $this->primePendingRequestAndExtractCsrf();
+        $form = $this->primePendingRequestForm();
 
         // Drop the pending request manually to simulate "no pending".
         $session = $this->client->getRequest()->getSession();
-        $session->remove(AuthorizationController::PENDING_REQUEST_KEY);
+        $session->remove(AuthorizationController::SESSION_KEY_PREFIX . $form['request_id']);
         $session->save();
 
-        $this->client->request('POST', '/oauth/consent', [
-            '_token' => $token,
-            'decision' => 'allow',
-        ]);
+        $this->client->request('POST', '/oauth/consent', [...$form, 'decision' => 'allow']);
 
         self::assertSame(400, $this->client->getResponse()->getStatusCode());
         $payload = json_decode((string) $this->client->getResponse()->getContent(), associative: true);
@@ -74,12 +87,9 @@ final class ConsentControllerTest extends WebTestCase
     public function test_allow_redirects_to_redirect_uri_with_code(): void
     {
         $this->loginAsAlice();
-        $token = $this->primePendingRequestAndExtractCsrf();
+        $form = $this->primePendingRequestForm();
 
-        $this->client->request('POST', '/oauth/consent', [
-            '_token' => $token,
-            'decision' => 'allow',
-        ]);
+        $this->client->request('POST', '/oauth/consent', [...$form, 'decision' => 'allow']);
 
         self::assertSame(302, $this->client->getResponse()->getStatusCode());
         $location = (string) $this->client->getResponse()->headers->get('Location');
@@ -91,12 +101,9 @@ final class ConsentControllerTest extends WebTestCase
     public function test_deny_redirects_with_access_denied_error(): void
     {
         $this->loginAsAlice();
-        $token = $this->primePendingRequestAndExtractCsrf();
+        $form = $this->primePendingRequestForm();
 
-        $this->client->request('POST', '/oauth/consent', [
-            '_token' => $token,
-            'decision' => 'deny',
-        ]);
+        $this->client->request('POST', '/oauth/consent', [...$form, 'decision' => 'deny']);
 
         self::assertSame(302, $this->client->getResponse()->getStatusCode());
         $location = (string) $this->client->getResponse()->headers->get('Location');
@@ -106,18 +113,12 @@ final class ConsentControllerTest extends WebTestCase
     public function test_replay_after_consume_returns_400(): void
     {
         $this->loginAsAlice();
-        $token = $this->primePendingRequestAndExtractCsrf();
+        $form = $this->primePendingRequestForm();
 
-        $this->client->request('POST', '/oauth/consent', [
-            '_token' => $token,
-            'decision' => 'allow',
-        ]);
+        $this->client->request('POST', '/oauth/consent', [...$form, 'decision' => 'allow']);
         self::assertSame(302, $this->client->getResponse()->getStatusCode());
 
-        $this->client->request('POST', '/oauth/consent', [
-            '_token' => $token,
-            'decision' => 'allow',
-        ]);
+        $this->client->request('POST', '/oauth/consent', [...$form, 'decision' => 'allow']);
         self::assertSame(400, $this->client->getResponse()->getStatusCode());
     }
 
@@ -148,15 +149,17 @@ final class ConsentControllerTest extends WebTestCase
 
     private function primePendingRequest(): void
     {
-        $this->primePendingRequestAndExtractCsrf();
+        $this->primePendingRequestForm();
     }
 
     /**
-     * GET /oauth/authorize to stash the pending request, then return the
-     * CSRF token from the rendered consent form (kept under the same
-     * session as the subsequent POST).
+     * GET /oauth/authorize so the controller stashes a pending
+     * AuthorizationRequest, then return the consent-form fields
+     * (_token + request_id) the next POST has to include.
+     *
+     * @return array{_token: string, request_id: string}
      */
-    private function primePendingRequestAndExtractCsrf(): string
+    private function primePendingRequestForm(): array
     {
         $crawler = $this->client->request('GET', sprintf(
             '/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=xyz',
@@ -169,10 +172,11 @@ final class ConsentControllerTest extends WebTestCase
         }
 
         $token = (string) $crawler->filter('input[name="_token"]')->attr('value');
-        if ($token === '') {
-            self::fail('CSRF token not found in consent form');
+        $requestId = (string) $crawler->filter('input[name="request_id"]')->attr('value');
+        if ($token === '' || $requestId === '') {
+            self::fail('Consent form did not include _token and request_id');
         }
 
-        return $token;
+        return ['_token' => $token, 'request_id' => $requestId];
     }
 }
