@@ -1,4 +1,6 @@
 {
+    "name": "mstysk/symfony-oauth",
+    "description": "OAuth 2.1 Authorization Server (and Phase 2: MCP Resource Server) PoC in PHP/Symfony 8.",
     "type": "project",
     "license": "proprietary",
     "minimum-stability": "stable",
