@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../vendor/symfony/dependency-injection/Loader/schema/services.schema.json
+
+# This file is the entry point to configure your own services.
+# Files in the packages/ subdirectory configure your dependencies.
+# See also https://symfony.com/doc/current/service_container/import.html
+
+# Put parameters here that don't need to change on each machine where the app is deployed
+# https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
+parameters:
+
+services:
+    # default configuration for services in *this* file
+    _defaults:
+        autowire: true      # Automatically injects dependencies in your services.
+        autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+
+    # makes classes in src/ available to be used as services
+    # this creates a service per class whose id is the fully-qualified class name
+    App\:
+        resource: '../src/'
+        exclude:
+            # Per-request value objects, not services. Built by their owning
+            # repository / grant.
+            - '../src/OAuth/Extension/McpAccessTokenEntity.php'
+            - '../src/OAuth/Extension/SimpleRefreshTokenEntity.php'
+            - '../src/OAuth/Entity/'
+
+    # ScopeRepository takes a scope-id => description array; not autowireable.
+    App\OAuth\Repository\ScopeRepository:
+        arguments:
+            $scopes:
+                mcp: 'MCP access'
+
+    # AccessTokenRepository builds McpAccessTokenEntity per request and so
+    # needs the JWT issuer + the public-key path (for KidDeriver agreement).
+    App\OAuth\Repository\AccessTokenRepository:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+
+    # league/oauth2-server interface -> App impl aliases (so autowire can
+    # resolve them in ResourceIndicatorGrant and AuthorizationServerFactory).
+    League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface: '@App\OAuth\Repository\AuthCodeRepository'
+    League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface: '@App\OAuth\Repository\AccessTokenRepository'
+    League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface: '@App\OAuth\Repository\RefreshTokenRepository'
+    League\OAuth2\Server\Repositories\ClientRepositoryInterface: '@App\OAuth\Repository\ClientRepository'
+    League\OAuth2\Server\Repositories\ScopeRepositoryInterface: '@App\OAuth\Repository\ScopeRepository'
+    League\OAuth2\Server\Repositories\UserRepositoryInterface: '@App\OAuth\Repository\UserRepository'
+
+    # ResourceIndicatorGrant constructor needs the auth code TTL (DateInterval)
+    # which can't be autowired.
+    App\OAuth\Extension\ResourceIndicatorGrant:
+        arguments:
+            $authCodeTTL: !service { class: 'DateInterval', arguments: ['%env(OAUTH_AUTH_CODE_TTL)%'] }
+
+    # OAuth extensions whose constructors take string/array primitives.
+    App\OAuth\Extension\AllowedResources:
+        arguments:
+            $values: '%env(csv:MCP_ALLOWED_RESOURCES)%'
+
+    App\OAuth\Extension\ServerMetadataBuilder:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+
+    App\OAuth\Extension\ProtectedResourceMetadataBuilder:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
+
+    App\OAuth\Extension\KidDeriver:
+        arguments:
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+
+    App\Controller\WellKnown\JwksController:
+        arguments:
+            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+        tags: ['controller.service_arguments']
+
+    App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
+        arguments:
+            $allowedHosts: ['localhost', '127.0.0.1']
+
+    # PSR-7 Bridge — convert Symfony Request <-> PSR-7 ServerRequest so
+    # the league AuthorizationServer can consume Symfony controller args.
+    Nyholm\Psr7\Factory\Psr17Factory: ~
+    Psr\Http\Message\ServerRequestFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\StreamFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\UploadedFileFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Psr\Http\Message\ResponseFactoryInterface: '@Nyholm\Psr7\Factory\Psr17Factory'
+    Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface: '@Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory'
+    Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory: ~
+    Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface: '@Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory'
+    Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory: ~
+
+    # AuthorizationServerFactory holds the env-derived strings the league
+    # AuthorizationServer needs at construction time.
+    App\OAuth\Server\AuthorizationServerFactory:
+        arguments:
+            $privateKeyPath: '%env(resolve:OAUTH_PRIVATE_KEY_PATH)%'
+            $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
+            $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
+            $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'
+
+    # add more service definitions when explicit configuration is needed
+    # please note that last definitions always *replace* previous ones
+
+when@test:
+    services:
+        _defaults:
+            autowire: true
+            autoconfigure: true
+            public: true
+
+        # Expose OAuth repos/extensions to test containers so kernel-backed
+        # tests can pull them via self::getContainer()->get(...) before any
+        # controller (Phase D) references them.
+        App\OAuth\Repository\:
+            resource: '../src/OAuth/Repository/'
+        App\OAuth\Extension\:
+            resource: '../src/OAuth/Extension/'
+            exclude:
+                - '../src/OAuth/Extension/McpAccessTokenEntity.php'
+                - '../src/OAuth/Extension/SimpleRefreshTokenEntity.php'
+
+        # Re-apply the explicit arguments that the resource patterns above
+        # would otherwise blow away (test resource patterns auto-wire by
+        # default, which fails on string/array primitives).
+        App\OAuth\Repository\ScopeRepository:
+            arguments:
+                $scopes:
+                    mcp: 'MCP access'
+
+        App\OAuth\Repository\AccessTokenRepository:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+                $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+
+        # league interface aliases (test resource pattern overrides the dev
+        # ones, so re-declare here).
+        League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface: '@App\OAuth\Repository\AuthCodeRepository'
+        League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface: '@App\OAuth\Repository\AccessTokenRepository'
+        League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface: '@App\OAuth\Repository\RefreshTokenRepository'
+        League\OAuth2\Server\Repositories\ClientRepositoryInterface: '@App\OAuth\Repository\ClientRepository'
+        League\OAuth2\Server\Repositories\ScopeRepositoryInterface: '@App\OAuth\Repository\ScopeRepository'
+        League\OAuth2\Server\Repositories\UserRepositoryInterface: '@App\OAuth\Repository\UserRepository'
+
+        App\OAuth\Extension\ResourceIndicatorGrant:
+            arguments:
+                $authCodeTTL: !service { class: 'DateInterval', arguments: ['%env(OAUTH_AUTH_CODE_TTL)%'] }
+
+        App\OAuth\Extension\AllowedResources:
+            arguments:
+                $values: '%env(csv:MCP_ALLOWED_RESOURCES)%'
+
+        App\OAuth\Extension\ServerMetadataBuilder:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+
+        App\OAuth\Extension\ProtectedResourceMetadataBuilder:
+            arguments:
+                $issuer: '%env(OAUTH_ISSUER)%'
+
+        App\OAuth\Extension\KidDeriver:
+            arguments:
+                $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+
+        App\OAuth\Extension\DynamicClientRegistration\ClientMetadataValidator:
+            arguments:
+                $allowedHosts: ['localhost', '127.0.0.1']
+
+        App\OAuth\Server\AuthorizationServerFactory:
+            arguments:
+                $privateKeyPath: '%env(resolve:OAUTH_PRIVATE_KEY_PATH)%'
+                $encryptionKey: '%env(OAUTH_ENCRYPTION_KEY)%'
+                $accessTokenTtl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
+                $refreshTokenTtl: '%env(OAUTH_REFRESH_TOKEN_TTL)%'

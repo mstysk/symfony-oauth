@@ -1,0 +1,21 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Authorize {{ client_name }}{% endblock %}
+
+{% block body %}
+<h1>Authorize {{ client_name }}</h1>
+
+<p>{{ client_name }} is requesting access to:</p>
+<ul>
+    {% for scope in scopes %}
+        <li>{{ scope }}</li>
+    {% endfor %}
+</ul>
+
+<form method="post" action="{{ path('app_oauth_consent') }}">
+    <input type="hidden" name="_token" value="{{ csrf_token('consent') }}">
+    <input type="hidden" name="request_id" value="{{ request_id }}">
+    <button type="submit" name="decision" value="allow">Allow</button>
+    <button type="submit" name="decision" value="deny">Deny</button>
+</form>
+{% endblock %}

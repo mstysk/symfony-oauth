@@ -1,0 +1,12 @@
+version: 2
+
+# Repo-level config for GitGuardian (https://docs.gitguardian.com/ggshield-docs/reference/config-file).
+# Allowlist test-only fixtures that are intentionally committed.
+secret:
+  ignored-paths:
+    # Test-only RSA keypair used by KidDeriverTest, McpAccessTokenEntityTest,
+    # and other JWT-issuance tests. 2048-bit, generated specifically for
+    # hermetic test runs. NEVER used to sign real tokens. See
+    # tests/fixtures/README.md.
+    - tests/fixtures/private.key
+    - tests/fixtures/public.key

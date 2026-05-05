@@ -1,0 +1,42 @@
+security:
+    password_hashers:
+        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
+
+    providers:
+        in_memory:
+            memory:
+                users:
+                    alice:
+                        # password = 'password' (PoC dev value).
+                        password: '$2y$13$abVilIj8bh.wU3foCpS0CeBhqU/w3DtfO5n2FR68tL79MLruPVl0S'
+                        roles: ['ROLE_USER']
+
+    firewalls:
+        dev:
+            pattern: ^/(_profiler|_wdt|assets|build)/
+            security: false
+        main:
+            lazy: true
+            provider: in_memory
+            form_login:
+                login_path: app_login
+                check_path: app_login
+                enable_csrf: true
+            logout:
+                path: app_logout
+
+    access_control:
+        - { path: ^/login, roles: PUBLIC_ACCESS }
+        - { path: ^/oauth/(authorize|consent), roles: ROLE_USER }
+        - { path: ^/.well-known/, roles: PUBLIC_ACCESS }
+        - { path: ^/oauth/(register|token), roles: PUBLIC_ACCESS }
+
+when@test:
+    security:
+        password_hashers:
+            # Cheap hashing in tests so the WebTestCase fixture isn't slow.
+            Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface:
+                algorithm: auto
+                cost: 4
+                time_cost: 3
+                memory_cost: 10

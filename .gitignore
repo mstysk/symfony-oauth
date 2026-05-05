@@ -1,0 +1,24 @@
+
+###> symfony/framework-bundle ###
+# .env is no longer committed — copy .env.example to .env locally and
+# fill in real values (see README "Quick start").
+/.env
+/.env.local
+/.env.local.php
+/.env.*.local
+/config/secrets/prod/prod.decrypt.private.php
+/public/bundles/
+/var/*
+/vendor/
+###< symfony/framework-bundle ###
+
+/config/jwt/*.key
+!/var/data/
+!/var/data/.gitkeep
+/var/data/*.db
+/var/data/*.db-journal
+
+###> phpunit/phpunit ###
+/phpunit.xml
+/.phpunit.cache/
+###< phpunit/phpunit ###

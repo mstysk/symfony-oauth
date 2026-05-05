@@ -1,0 +1,9 @@
+framework:
+    rate_limiter:
+        # Per-IP rate limit on /oauth/register (DCR). Open registration
+        # (no initial access token) so we cap to 5 attempts per minute.
+        dcr:
+            policy: 'token_bucket'
+            limit: 5
+            rate: { interval: '1 minute', amount: 5 }
+

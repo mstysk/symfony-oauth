@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: intl, pdo_sqlite, zip
+          tools: composer:2
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: ${{ runner.os }}-php${{ matrix.php }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ matrix.php }}-composer-
+
+      - name: Bootstrap .env from example
+        # .env is gitignored (we never commit real secrets). CI seeds
+        # it BEFORE composer install because the @auto-scripts
+        # post-install hook runs cache:clear, which boots the kernel
+        # and Dotenv::bootEnv() requires .env to exist. .env.example
+        # holds dev defaults; OAUTH_ENCRYPTION_KEY in .env.test is the
+        # GENERATE_AT_RUNTIME sentinel that tests/bootstrap.php swaps
+        # for a freshly-generated defuse key.
+        run: cp .env.example .env
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Verify Doctrine entity mapping
+        run: php bin/console doctrine:mapping:info --env=test
+
+      - name: Run PHPUnit
+        env:
+          APP_ENV: test
+        run: vendor/bin/phpunit --testdox
+
+  audit:
+    name: Composer audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:2
+          coverage: none
+
+      - name: Audit dependencies for known vulnerabilities
+        run: composer audit
