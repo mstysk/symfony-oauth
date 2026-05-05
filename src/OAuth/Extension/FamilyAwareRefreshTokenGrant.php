@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\OAuth\Extension;
 
 use App\OAuth\Entity\RefreshToken as RefreshTokenRow;
+use DateInterval;
 use Doctrine\ORM\EntityManagerInterface;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
 use League\OAuth2\Server\Grant\RefreshTokenGrant;
 use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
+use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
@@ -28,6 +30,25 @@ final class FamilyAwareRefreshTokenGrant extends RefreshTokenGrant
         private readonly EntityManagerInterface $em,
     ) {
         parent::__construct($refreshTokenRepository);
+    }
+
+    /**
+     * Wrap parent in try/finally so $pendingFamilyId is always cleared,
+     * including when issueRefreshToken throws after max-attempts. Without
+     * this, long-running PHP runtimes (RoadRunner / FrankenPHP / Swoole)
+     * that reuse the grant singleton across requests would leak the
+     * previous request's family_id into the next refresh.
+     */
+    public function respondToAccessTokenRequest(
+        ServerRequestInterface $request,
+        ResponseTypeInterface $responseType,
+        DateInterval $accessTokenTTL,
+    ): ResponseTypeInterface {
+        try {
+            return parent::respondToAccessTokenRequest($request, $responseType, $accessTokenTTL);
+        } finally {
+            $this->pendingFamilyId = null;
+        }
     }
 
     /**
@@ -79,8 +100,6 @@ final class FamilyAwareRefreshTokenGrant extends RefreshTokenGrant
             $refreshToken->setIdentifier($this->generateUniqueIdentifier());
             try {
                 $this->refreshTokenRepository->persistNewRefreshToken($refreshToken);
-
-                $this->pendingFamilyId = null;
 
                 return $refreshToken;
             } catch (\League\OAuth2\Server\Exception\UniqueTokenIdentifierConstraintViolationException $e) {
