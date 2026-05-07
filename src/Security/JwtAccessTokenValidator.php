@@ -34,7 +34,6 @@ final class JwtAccessTokenValidator
     private ?Configuration $config = null;
 
     public function __construct(
-        private readonly string $publicKeyPath,
         private readonly string $issuer,
         private readonly KidDeriver $kidDeriver,
         private readonly AllowedResources $allowedResources,
@@ -121,7 +120,10 @@ final class JwtAccessTokenValidator
     private function config(): Configuration
     {
         if ($this->config === null) {
-            $key = InMemory::file($this->publicKeyPath);
+            // Single source of truth for the public key — KidDeriver also
+            // reads it, so sharing the path here is what guarantees the
+            // verification key and the kid header agree.
+            $key = InMemory::file($this->kidDeriver->getPublicKeyPath());
             $this->config = Configuration::forAsymmetricSigner(new Sha256(), $key, $key);
         }
 

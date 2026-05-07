@@ -169,7 +169,6 @@ final class JwtAccessTokenValidatorTest extends TestCase
     private function validator(): JwtAccessTokenValidator
     {
         return new JwtAccessTokenValidator(
-            publicKeyPath: $this->publicPath,
             issuer: self::ISSUER,
             kidDeriver: new KidDeriver($this->publicPath),
             allowedResources: new AllowedResources([self::ALLOWED]),

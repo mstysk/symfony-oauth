@@ -77,11 +77,11 @@ services:
         arguments:
             $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
-    # Mirror the AccessTokenRepository binding so the validator's issuer +
-    # public-key path match what tokens were minted with.
+    # Mirror the AccessTokenRepository issuer binding. Public-key path is
+    # NOT bound here on purpose — the validator pulls it from KidDeriver
+    # so verification key and kid stay tied to a single env-var binding.
     App\Security\JwtAccessTokenValidator:
         arguments:
-            $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
             $issuer: '%env(OAUTH_ISSUER)%'
 
     App\Controller\WellKnown\JwksController:

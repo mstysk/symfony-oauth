@@ -12,6 +12,11 @@ final class KidDeriver
     {
     }
 
+    public function getPublicKeyPath(): string
+    {
+        return $this->publicKeyPath;
+    }
+
     public function derive(): string
     {
         return $this->kid ??= $this->compute();
