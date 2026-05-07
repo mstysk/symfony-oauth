@@ -50,12 +50,12 @@ final class McpAuthenticationTest extends WebTestCase
         // Read the same key paths the validator's binding sees. In CI the
         // path comes from .env.test as %kernel.project_dir%/tests/fixtures/...;
         // in local Docker the compose environment sets /app/config/jwt/...
-        // and dotenv won't override (overrideExistingVars: false). Resolve
-        // the placeholder ourselves so this test matches the validator either
-        // way without forking the env at the bootstrap layer.
-        $projectDir = \dirname(__DIR__, 3);
-        $this->privateKeyPath = $this->resolveKeyPath((string) ($_SERVER['OAUTH_PRIVATE_KEY_PATH'] ?? ''), $projectDir);
-        $this->publicKeyPath = $this->resolveKeyPath((string) ($_SERVER['OAUTH_PUBLIC_KEY_PATH'] ?? ''), $projectDir);
+        // and dotenv won't override (overrideExistingVars: false). The
+        // container's parameter bag handles either form: literal paths pass
+        // through, %kernel.project_dir% gets substituted.
+        $bag = self::getContainer()->getParameterBag();
+        $this->privateKeyPath = (string) $bag->resolveValue((string) ($_SERVER['OAUTH_PRIVATE_KEY_PATH'] ?? ''));
+        $this->publicKeyPath = (string) $bag->resolveValue((string) ($_SERVER['OAUTH_PUBLIC_KEY_PATH'] ?? ''));
         $this->expectedKid = (new KidDeriver($this->publicKeyPath))->derive();
     }
 
@@ -252,11 +252,6 @@ final class McpAuthenticationTest extends WebTestCase
             ->relatedTo('alice');
 
         return $builder->getToken($config->signer(), $config->signingKey())->toString();
-    }
-
-    private function resolveKeyPath(string $value, string $projectDir): string
-    {
-        return str_replace('%kernel.project_dir%', $projectDir, $value);
     }
 
     private function seedAccessToken(string $jti, bool $revoked = false): void

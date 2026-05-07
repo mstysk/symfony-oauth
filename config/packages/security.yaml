@@ -15,7 +15,7 @@ security:
         dev:
             pattern: ^/(_profiler|_wdt|assets|build)/
             security: false
-        # Phase 2: stateless Bearer-JWT firewall for the MCP Resource Server.
+        # Stateless Bearer-JWT firewall for the MCP Resource Server.
         # Must precede `main` so /mcp doesn't fall through to form_login.
         mcp:
             pattern: ^/mcp

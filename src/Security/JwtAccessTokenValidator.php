@@ -31,6 +31,8 @@ use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
  */
 final class JwtAccessTokenValidator
 {
+    private ?Configuration $config = null;
+
     public function __construct(
         private readonly string $publicKeyPath,
         private readonly string $issuer,
@@ -42,8 +44,7 @@ final class JwtAccessTokenValidator
 
     public function validate(string $rawJwt): ValidatedToken
     {
-        $verificationKey = InMemory::file($this->publicKeyPath);
-        $config = Configuration::forAsymmetricSigner(new Sha256(), $verificationKey, $verificationKey);
+        $config = $this->config();
 
         try {
             $token = $config->parser()->parse($rawJwt);
@@ -115,6 +116,16 @@ final class JwtAccessTokenValidator
             scopes: $scopes,
             audiences: $auds,
         );
+    }
+
+    private function config(): Configuration
+    {
+        if ($this->config === null) {
+            $key = InMemory::file($this->publicKeyPath);
+            $this->config = Configuration::forAsymmetricSigner(new Sha256(), $key, $key);
+        }
+
+        return $this->config;
     }
 
     /** @return list<string> */

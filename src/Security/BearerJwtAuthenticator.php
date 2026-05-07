@@ -24,7 +24,7 @@ use Symfony\Component\Security\Http\EntryPoint\AuthenticationEntryPointInterface
  *
  * The 401 entry-point body is intentionally empty — RFC 6750 §3 puts
  * Bearer challenge information in the WWW-Authenticate header, which
- * McpAuthenticationListener (commit 13) attaches in the response phase.
+ * McpAuthenticationListener attaches in the response phase.
  */
 final class BearerJwtAuthenticator extends AbstractAuthenticator implements AuthenticationEntryPointInterface
 {

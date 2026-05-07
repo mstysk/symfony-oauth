@@ -6,11 +6,18 @@ namespace App\OAuth\Extension;
 
 final class KidDeriver
 {
+    private ?string $kid = null;
+
     public function __construct(private readonly string $publicKeyPath)
     {
     }
 
     public function derive(): string
+    {
+        return $this->kid ??= $this->compute();
+    }
+
+    private function compute(): string
     {
         $pem = @file_get_contents($this->publicKeyPath);
         if ($pem === false) {

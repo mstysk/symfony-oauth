@@ -77,8 +77,8 @@ services:
         arguments:
             $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
 
-    # Phase 2: validates Bearer JWTs at /mcp. Mirror the AccessTokenRepository
-    # binding so issuer + public-key path match what tokens were minted with.
+    # Mirror the AccessTokenRepository binding so the validator's issuer +
+    # public-key path match what tokens were minted with.
     App\Security\JwtAccessTokenValidator:
         arguments:
             $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'

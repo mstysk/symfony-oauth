@@ -35,57 +35,43 @@ final class McpController
         try {
             $payload = json_decode($request->getContent(), associative: true, flags: \JSON_THROW_ON_ERROR);
         } catch (\JsonException $e) {
-            return $this->errorResponse(null, JsonRpcException::PARSE_ERROR, 'Parse error: ' . $e->getMessage());
+            return $this->errorResponse(false, null, JsonRpcException::PARSE_ERROR, 'Parse error: ' . $e->getMessage());
         }
 
         if (!is_array($payload)) {
-            return $this->errorResponse(null, JsonRpcException::INVALID_REQUEST, 'Request must be a JSON object.');
+            return $this->errorResponse(false, null, JsonRpcException::INVALID_REQUEST, 'Request must be a JSON object.');
         }
 
         // JSON-RPC 2.0: a notification has no `id` member at all (vs. id=null
-        // which is still a request). Track that distinction explicitly so
-        // dispatcher errors on notifications produce 202, not an error body.
+        // which is still a request). errorResponse() honors that — a notification
+        // gets 202 with no body even when its envelope is malformed.
         $isNotification = !array_key_exists('id', $payload);
         /** @var int|string|null $id */
         $id = $payload['id'] ?? null;
 
         if (($payload['jsonrpc'] ?? null) !== '2.0') {
-            return $isNotification
-                ? new Response('', Response::HTTP_ACCEPTED)
-                : $this->errorResponse($id, JsonRpcException::INVALID_REQUEST, 'jsonrpc must be "2.0".');
+            return $this->errorResponse($isNotification, $id, JsonRpcException::INVALID_REQUEST, 'jsonrpc must be "2.0".');
         }
 
         $method = $payload['method'] ?? null;
         if (!is_string($method)) {
-            return $isNotification
-                ? new Response('', Response::HTTP_ACCEPTED)
-                : $this->errorResponse($id, JsonRpcException::INVALID_REQUEST, 'method must be a string.');
+            return $this->errorResponse($isNotification, $id, JsonRpcException::INVALID_REQUEST, 'method must be a string.');
         }
 
         $params = $payload['params'] ?? [];
         if (!is_array($params)) {
-            return $isNotification
-                ? new Response('', Response::HTTP_ACCEPTED)
-                : $this->errorResponse($id, JsonRpcException::INVALID_REQUEST, 'params must be an object if present.');
+            return $this->errorResponse($isNotification, $id, JsonRpcException::INVALID_REQUEST, 'params must be an object if present.');
         }
 
         // RFC 6750 §3.1 — `initialize` is the only method allowed without
         // the `mcp` scope (per MCP discovery semantics: a client should be
         // able to negotiate protocol version before exposing tool calls).
-        // Everything else requires the scope; missing it is 403, not 401,
-        // since the token IS valid — it just isn't authorized for /mcp's
-        // tool surface. The WWW-Authenticate scope-challenge header is
-        // attached by McpAuthenticationListener.
+        // Missing scope on any other method is 403 (the token is valid, it
+        // just isn't authorized for /mcp's tool surface).
         if ($method !== 'initialize') {
             $validated = $request->attributes->get(BearerJwtAuthenticator::VALIDATED_TOKEN_ATTRIBUTE);
             if (!$validated instanceof ValidatedToken || !$validated->hasScope('mcp')) {
-                return $isNotification
-                    ? new Response('', Response::HTTP_ACCEPTED)
-                    : new JsonResponse([
-                        'jsonrpc' => '2.0',
-                        'id' => $id,
-                        'error' => ['code' => -32000, 'message' => 'insufficient_scope'],
-                    ], Response::HTTP_FORBIDDEN);
+                return $this->errorResponse($isNotification, $id, -32000, 'insufficient_scope', Response::HTTP_FORBIDDEN);
             }
         }
 
@@ -93,9 +79,7 @@ final class McpController
             /** @var array<string, mixed> $params */
             $result = $this->dispatcher->dispatch($method, $params);
         } catch (JsonRpcException $e) {
-            return $isNotification
-                ? new Response('', Response::HTTP_ACCEPTED)
-                : $this->errorResponse($id, $e->jsonRpcCode, $e->getMessage());
+            return $this->errorResponse($isNotification, $id, $e->jsonRpcCode, $e->getMessage());
         }
 
         if ($isNotification) {
@@ -109,15 +93,25 @@ final class McpController
         ]);
     }
 
-    private function errorResponse(int|string|null $id, int $code, string $message): JsonResponse
-    {
+    private function errorResponse(
+        bool $isNotification,
+        int|string|null $id,
+        int $code,
+        string $message,
+        int $httpStatus = Response::HTTP_OK,
+    ): Response {
+        if ($isNotification) {
+            return new Response('', Response::HTTP_ACCEPTED);
+        }
+
         // Per JSON-RPC 2.0 §5: HTTP transports return 200 even on a JSON-RPC
-        // error so the client reads error.code from the body. (HTTP 4xx/5xx
-        // is reserved for transport-level failures like auth or server crash.)
+        // error so the client reads error.code from the body. /mcp deviates
+        // for 403 (insufficient_scope) so RFC 6750 §3.1 clients can react
+        // to the status code; the body still carries the JSON-RPC error.
         return new JsonResponse([
             'jsonrpc' => '2.0',
             'id' => $id,
             'error' => ['code' => $code, 'message' => $message],
-        ]);
+        ], $httpStatus);
     }
 }
