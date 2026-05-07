@@ -1,10 +1,20 @@
 nelmio_cors:
     defaults:
         origin_regex: true
-        allow_origin: ['%env(CORS_ALLOW_ORIGIN)%']
-        allow_methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
-        allow_headers: ['Content-Type', 'Authorization']
-        expose_headers: ['Link']
-        max_age: 3600
+        allow_origin: []
+        allow_methods: []
+        allow_headers: []
+        expose_headers: []
+        max_age: 0
     paths:
-        '^/': null
+        '^/mcp':
+            # MCP Inspector defaults to localhost:6274; some clients use Vite
+            # at localhost:5173. Both must be explicit because credentialed
+            # CORS forbids the wildcard.
+            allow_origin: ['^http://localhost:(6274|5173)$']
+            allow_methods: ['POST', 'OPTIONS']
+            allow_headers: ['Content-Type', 'Authorization', 'MCP-Session-Id']
+            # Expose WWW-Authenticate so MCP clients can read the Bearer
+            # challenge + resource_metadata pointer for AS discovery.
+            expose_headers: ['WWW-Authenticate', 'MCP-Session-Id']
+            max_age: 3600
