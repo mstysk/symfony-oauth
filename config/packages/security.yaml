@@ -20,6 +20,11 @@ security:
         mcp:
             pattern: ^/mcp
             stateless: true
+            # Symfony requires a `provider:` for non-anonymous firewalls,
+            # but BearerJwtAuthenticator never consults it — the UserBadge
+            # constructs an InMemoryUser directly from the JWT's jti. The
+            # in_memory provider listed here is a config requirement, not
+            # a runtime dependency.
             provider: in_memory
             custom_authenticators:
                 - App\Security\BearerJwtAuthenticator

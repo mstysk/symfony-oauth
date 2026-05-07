@@ -46,7 +46,9 @@ final class McpController
         // which is still a request). errorResponse() honors that — a notification
         // gets 202 with no body even when its envelope is malformed.
         $isNotification = !array_key_exists('id', $payload);
-        /** @var int|string|null $id */
+        // JSON-RPC 2.0 §4: id is "a String, Number, or NULL" — Number
+        // includes float, so don't narrow to int|string|null.
+        /** @var int|float|string|null $id */
         $id = $payload['id'] ?? null;
 
         if (($payload['jsonrpc'] ?? null) !== '2.0') {
@@ -68,10 +70,21 @@ final class McpController
         // able to negotiate protocol version before exposing tool calls).
         // Missing scope on any other method is 403 (the token is valid, it
         // just isn't authorized for /mcp's tool surface).
+        //
+        // Note: a notification (no `id`) without scope returns 202 with no
+        // body — JSON-RPC notifications never receive a response, so the
+        // 403 + WWW-Authenticate challenge is unreachable for that path.
+        // Notification clients without scope will silently no-op.
         if ($method !== 'initialize') {
             $validated = $request->attributes->get(BearerJwtAuthenticator::VALIDATED_TOKEN_ATTRIBUTE);
             if (!$validated instanceof ValidatedToken || !$validated->hasScope('mcp')) {
-                return $this->errorResponse($isNotification, $id, -32000, 'insufficient_scope', Response::HTTP_FORBIDDEN);
+                return $this->errorResponse(
+                    $isNotification,
+                    $id,
+                    JsonRpcException::INSUFFICIENT_SCOPE,
+                    'insufficient_scope',
+                    Response::HTTP_FORBIDDEN,
+                );
             }
         }
 
@@ -95,7 +108,7 @@ final class McpController
 
     private function errorResponse(
         bool $isNotification,
-        int|string|null $id,
+        int|float|string|null $id,
         int $code,
         string $message,
         int $httpStatus = Response::HTTP_OK,

@@ -18,6 +18,9 @@ final class JsonRpcException extends \RuntimeException
     public const INVALID_PARAMS = -32602;
     public const INTERNAL_ERROR = -32603;
 
+    // Implementation-defined codes (-32000 to -32099 per JSON-RPC 2.0 §5.1).
+    public const INSUFFICIENT_SCOPE = -32000;
+
     public function __construct(
         public readonly int $jsonRpcCode,
         string $message,
