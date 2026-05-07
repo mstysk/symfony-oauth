@@ -6,6 +6,8 @@ namespace App\Controller\Mcp;
 
 use App\Mcp\JsonRpcDispatcher;
 use App\Mcp\JsonRpcException;
+use App\Security\BearerJwtAuthenticator;
+use App\Security\ValidatedToken;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -65,6 +67,26 @@ final class McpController
             return $isNotification
                 ? new Response('', Response::HTTP_ACCEPTED)
                 : $this->errorResponse($id, JsonRpcException::INVALID_REQUEST, 'params must be an object if present.');
+        }
+
+        // RFC 6750 §3.1 — `initialize` is the only method allowed without
+        // the `mcp` scope (per MCP discovery semantics: a client should be
+        // able to negotiate protocol version before exposing tool calls).
+        // Everything else requires the scope; missing it is 403, not 401,
+        // since the token IS valid — it just isn't authorized for /mcp's
+        // tool surface. The WWW-Authenticate scope-challenge header is
+        // attached by McpAuthenticationListener.
+        if ($method !== 'initialize') {
+            $validated = $request->attributes->get(BearerJwtAuthenticator::VALIDATED_TOKEN_ATTRIBUTE);
+            if (!$validated instanceof ValidatedToken || !$validated->hasScope('mcp')) {
+                return $isNotification
+                    ? new Response('', Response::HTTP_ACCEPTED)
+                    : new JsonResponse([
+                        'jsonrpc' => '2.0',
+                        'id' => $id,
+                        'error' => ['code' => -32000, 'message' => 'insufficient_scope'],
+                    ], Response::HTTP_FORBIDDEN);
+            }
         }
 
         try {
