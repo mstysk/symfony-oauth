@@ -9,7 +9,6 @@ use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
-use Symfony\Contracts\Cache\CacheInterface;
 
 final class ClientRegistrationControllerTest extends WebTestCase
 {
@@ -32,7 +31,6 @@ final class ClientRegistrationControllerTest extends WebTestCase
         // (the limiter uses cache.rate_limiter, which persists state across
         // kernel reboots within a phpunit run).
         $rateLimiterCache = self::getContainer()->get('cache.rate_limiter');
-        \assert($rateLimiterCache instanceof CacheInterface);
         $rateLimiterCache->clear();
     }
 

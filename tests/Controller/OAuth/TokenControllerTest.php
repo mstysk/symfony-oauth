@@ -9,11 +9,11 @@ use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use Lcobucci\JWT\Encoding\JoseEncoder;
 use Lcobucci\JWT\Token\Parser;
+use Lcobucci\JWT\UnencryptedToken;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\Security\Core\User\InMemoryUserProvider;
 use Symfony\Component\Uid\Uuid;
-use Symfony\Contracts\Cache\CacheInterface;
 
 final class TokenControllerTest extends WebTestCase
 {
@@ -35,7 +35,6 @@ final class TokenControllerTest extends WebTestCase
         }
 
         $cache = self::getContainer()->get('cache.app');
-        \assert($cache instanceof CacheInterface);
         $cache->clear();
 
         $this->clientId = $this->seedClient();
@@ -64,6 +63,7 @@ final class TokenControllerTest extends WebTestCase
 
         // The JWT carries aud === [resource] per RFC 8707.
         $jwt = (new Parser(new JoseEncoder()))->parse($body['access_token']);
+        self::assertInstanceOf(UnencryptedToken::class, $jwt);
         self::assertSame(['http://localhost:8000/mcp'], $jwt->claims()->get('aud'));
         self::assertSame('http://localhost:8000', $jwt->claims()->get('iss'));
     }
@@ -289,9 +289,11 @@ final class TokenControllerTest extends WebTestCase
             'request_id' => $requestId,
             'decision' => 'allow',
         ]);
-        if ($this->client->getResponse()->getStatusCode() !== 302) {
-            self::fail('Consent allow failed: ' . $this->client->getResponse()->getStatusCode() . ' ' . (string) $this->client->getResponse()->getContent());
-        }
+        self::assertSame(
+            302,
+            $this->client->getResponse()->getStatusCode(),
+            'Consent allow failed: ' . (string) $this->client->getResponse()->getContent(),
+        );
 
         $location = (string) $this->client->getResponse()->headers->get('Location');
         $query = [];

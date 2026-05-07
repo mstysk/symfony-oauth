@@ -15,6 +15,20 @@ security:
         dev:
             pattern: ^/(_profiler|_wdt|assets|build)/
             security: false
+        # Stateless Bearer-JWT firewall for the MCP Resource Server.
+        # Must precede `main` so /mcp doesn't fall through to form_login.
+        mcp:
+            pattern: ^/mcp
+            stateless: true
+            # Symfony requires a `provider:` for non-anonymous firewalls,
+            # but BearerJwtAuthenticator never consults it — the UserBadge
+            # constructs an InMemoryUser directly from the JWT's jti. The
+            # in_memory provider listed here is a config requirement, not
+            # a runtime dependency.
+            provider: in_memory
+            custom_authenticators:
+                - App\Security\BearerJwtAuthenticator
+            entry_point: App\Security\BearerJwtAuthenticator
         main:
             lazy: true
             provider: in_memory
@@ -30,6 +44,7 @@ security:
         - { path: ^/oauth/(authorize|consent), roles: ROLE_USER }
         - { path: ^/.well-known/, roles: PUBLIC_ACCESS }
         - { path: ^/oauth/(register|token), roles: PUBLIC_ACCESS }
+        - { path: ^/mcp, roles: IS_AUTHENTICATED_FULLY }
 
 when@test:
     security:

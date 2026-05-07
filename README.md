@@ -1,12 +1,12 @@
-# symfony-oauth — OAuth 2.1 AS for MCP
+# symfony-oauth — OAuth 2.1 AS + MCP RS
 
 [![CI](https://github.com/mstysk/symfony-oauth/actions/workflows/ci.yml/badge.svg)](https://github.com/mstysk/symfony-oauth/actions/workflows/ci.yml)
 
-OAuth 2.1 Authorization Server in PHP/Symfony 8, designed to satisfy the
-Model Context Protocol (MCP) authorization profile end-to-end.
+OAuth 2.1 Authorization Server **and** co-located MCP Resource Server in
+PHP/Symfony 8, in a single app process.
 
-> **Status:** Phase 1 (Authorization Server) complete. Phase 2 will add
-> the co-located MCP Resource Server (`/mcp`) in the same Symfony app.
+> **Status:** Phase 1 (Authorization Server) and Phase 2 (MCP Resource
+> Server with Bearer JWT auth + an `echo` tool) are both complete.
 > Detailed design: [`docs/plans/2026-04-29-oauth-mcp-poc-design.md`](docs/plans/2026-04-29-oauth-mcp-poc-design.md).
 > Phase 1 implementation plan: [`docs/plans/2026-04-29-oauth-2-1-as-phase1.md`](docs/plans/2026-04-29-oauth-2-1-as-phase1.md).
 
@@ -38,6 +38,7 @@ the standard OAuth core, with MCP-specific RFC layers isolated under
 | `/oauth/consent` | POST | One-shot CSRF-protected consent submit |
 | `/oauth/token` | POST | Authorization code + refresh token grants |
 | `/login`, `/logout` | GET\|POST | InMemory user login form |
+| `/mcp` | POST | MCP Resource Server (JSON-RPC 2.0; Bearer JWT required) |
 
 ## MCP-spec invariants enforced
 
@@ -49,6 +50,7 @@ the standard OAuth core, with MCP-specific RFC layers isolated under
 - **Consent is bound to a per-request `request_id`** — defeats session-key overwrite confused-deputy.
 - **DCR open registration** with redirect-host allowlist.
 - **No bearer tokens in URL query strings** (PRM `bearer_methods_supported = ["header"]`).
+- **/mcp validates the JWT in-process** — same Symfony app reads the public key directly (no HTTP-fetched JWKS), then checks signature → exp/nbf → iss → aud (allow-list) → kid header → revocation, in that order. Missing scope is 403 with RFC 6750 §3.1 `error="insufficient_scope"`; missing/invalid Bearer is 401 with RFC 9728 §5.1 `resource_metadata` pointing at `/.well-known/oauth-protected-resource`.
 
 ## Architecture
 
@@ -57,9 +59,15 @@ src/
 ├── Controller/
 │   ├── OAuth/                      # /oauth/{authorize,consent,register,token}
 │   ├── WellKnown/                  # /.well-known/oauth-* + jwks
+│   ├── Mcp/McpController.php       # /mcp (Phase 2)
 │   └── SecurityController.php      # /login, /logout
 ├── EventListener/
-│   └── OAuthExceptionListener.php  # league exception → RFC-shaped JSON / 302
+│   ├── OAuthExceptionListener.php  # league exception → RFC-shaped JSON / 302
+│   └── McpAuthenticationListener.php  # WWW-Authenticate on /mcp 401/403 (Phase 2)
+├── Mcp/                            # Phase 2 — JSON-RPC dispatch + tools
+│   ├── JsonRpcDispatcher.php       # initialize / tools/list / tools/call
+│   ├── JsonRpcException.php        # JSON-RPC 2.0 error codes
+│   └── Tool/                       # ToolInterface + EchoTool (autoconfigured)
 ├── OAuth/
 │   ├── Entity/                     # Doctrine + league entity adapters
 │   ├── Extension/                  # MCP/RFC layers absent from league
@@ -73,11 +81,17 @@ src/
 │   ├── Repository/                 # Doctrine repos + league interface adapters
 │   └── Server/
 │       └── AuthorizationServerFactory.php   # league AS wiring
+├── Security/                       # Phase 2 — Bearer JWT validation + firewall
+│   ├── JwtAccessTokenValidator.php # signature/exp/iss/aud/kid/scope/revocation
+│   ├── BearerJwtAuthenticator.php  # Symfony Authenticator for ^/mcp
+│   ├── ValidatedToken.php          # parsed-claims value object
+│   └── InvalidJwt{Exception,Reason}.php
 config/
 ├── packages/
 │   ├── doctrine.yaml               # types: { uuid: UuidType }
+│   ├── nelmio_cors.yaml            # MCP Inspector preflight (Phase 2)
 │   ├── rate_limiter.yaml           # dcr: 5/min token bucket
-│   └── security.yaml               # InMemory provider, firewall
+│   └── security.yaml               # InMemory provider + ^/mcp Bearer firewall
 └── services.yaml                   # explicit DI for env-driven services
 docs/plans/                         # design + phase plans (source of truth)
 ```
@@ -107,6 +121,38 @@ docker compose exec app php bin/console doctrine:migrations:migrate -n
 curl -s http://localhost:8000/.well-known/oauth-authorization-server | jq .
 ```
 
+## Calling /mcp
+
+`/mcp` accepts a single JSON-RPC 2.0 message per POST. A request without a
+valid Bearer JWT gets 401 + `WWW-Authenticate` pointing at the
+protected-resource metadata URL — that's how an MCP Inspector or Claude
+Desktop client discovers the AS to acquire a token from.
+
+```bash
+# Discovery (no auth required)
+curl -i -X POST http://localhost:8000/mcp -H 'Content-Type: application/json' -d '{}'
+# → 401, WWW-Authenticate: Bearer realm="symfony-oauth",
+#                         resource_metadata="…/.well-known/oauth-protected-resource"
+
+# After acquiring a token (drive /authorize → /consent → /token):
+TOKEN=…
+curl -s -X POST http://localhost:8000/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hi"}}}'
+# → {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"hi"}],"isError":false}}
+```
+
+**MCP Inspector v0.21+:**
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Connect to `http://localhost:8000/mcp` with the Bearer token from the
+flow above. The Inspector's CORS preflight is allow-listed for
+`localhost:6274` (and Vite at `:5173`); other origins are rejected.
+
 ## Tests
 
 ```bash
@@ -119,8 +165,8 @@ The `SYMFONY_DISABLE_DOTENV=0` override is needed because the container
 sets it to `1` in dev so Compose-injected env wins; tests, however, need
 to read `.env.test`.
 
-CI runs the same suite plus `composer audit` on every PR — see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs the same suite plus `composer audit` and `phpstan analyse` (level
+6) on every PR — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Secrets handling
 
@@ -145,11 +191,11 @@ docker compose exec app php bin/console doctrine:mapping:info
 docker compose exec app php bin/console security:hash-password
 ```
 
-## Out of scope (Phase 1)
+## Out of scope (PoC)
 
-- The MCP Resource Server (`/mcp`) — Phase 2.
 - MySQL/Postgres (SQLite only for the PoC).
 - KMS-managed signing keys; secret rotation.
 - Login throttling beyond DCR rate-limit.
-- PHPStan / Psalm static analysis.
+- MCP `resources` / `prompts` / `sampling` (Phase 2 covers tools only).
+- SSE streaming / session resumability on `/mcp`.
 - Multi-tenant / multi-issuer.

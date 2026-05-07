@@ -72,6 +72,7 @@ final class ResourceIndicatorGrantTest extends TestCase
         self::assertSame($expected, ResourceIndicatorGrant::isAcceptableResourceScheme($resource));
     }
 
+    /** @return iterable<string, array{string, bool}> */
     public static function acceptable_scheme_cases(): iterable
     {
         // https — always OK.

@@ -16,6 +16,7 @@ final class RedirectUriNormalizerTest extends TestCase
         self::assertSame($expected, RedirectUriNormalizer::normalize($input));
     }
 
+    /** @return iterable<array{string, string}> */
     public static function cases(): iterable
     {
         // Host is lowercased; scheme is lowercased.

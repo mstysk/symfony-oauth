@@ -15,6 +15,7 @@
         "doctrine/orm": "^3",
         "lcobucci/jwt": "^5",
         "league/oauth2-server": "^9",
+        "nelmio/cors-bundle": "^2.6",
         "nyholm/psr7": "^1.8",
         "ramsey/uuid": "^4",
         "symfony/console": "8.0.*",
@@ -35,7 +36,8 @@
         "allow-plugins": {
             "php-http/discovery": true,
             "symfony/flex": true,
-            "symfony/runtime": true
+            "symfony/runtime": true,
+            "phpstan/extension-installer": true
         },
         "bump-after-update": true,
         "sort-packages": true
@@ -84,6 +86,10 @@
         }
     },
     "require-dev": {
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-doctrine": "^2.0",
+        "phpstan/phpstan-symfony": "^2.0",
         "phpunit/phpunit": "^13.1",
         "symfony/browser-kit": "8.0.*",
         "symfony/css-selector": "8.0.*",

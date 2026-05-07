@@ -50,6 +50,11 @@ jobs:
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress --no-interaction
 
+      - name: Run PHPStan
+        # The Symfony extension reads var/cache/dev/App_KernelDevDebugContainer.xml,
+        # which `composer install`'s post-install cache:clear has already produced.
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
       - name: Verify Doctrine entity mapping
         run: php bin/console doctrine:mapping:info --env=test
 

@@ -25,6 +25,13 @@ services:
             - '../src/OAuth/Extension/SimpleRefreshTokenEntity.php'
             - '../src/OAuth/Entity/'
 
+    # Auto-tag every MCP tool so the dispatcher can iterate them via
+    # iterator(app.mcp_tool). Add a tool = add a class implementing
+    # ToolInterface; no other wiring needed.
+    _instanceof:
+        App\Mcp\Tool\ToolInterface:
+            tags: ['app.mcp_tool']
+
     # ScopeRepository takes a scope-id => description array; not autowireable.
     App\OAuth\Repository\ScopeRepository:
         arguments:
@@ -69,6 +76,13 @@ services:
     App\OAuth\Extension\KidDeriver:
         arguments:
             $publicKeyPath: '%env(resolve:OAUTH_PUBLIC_KEY_PATH)%'
+
+    # Mirror the AccessTokenRepository issuer binding. Public-key path is
+    # NOT bound here on purpose — the validator pulls it from KidDeriver
+    # so verification key and kid stay tied to a single env-var binding.
+    App\Security\JwtAccessTokenValidator:
+        arguments:
+            $issuer: '%env(OAUTH_ISSUER)%'
 
     App\Controller\WellKnown\JwksController:
         arguments:

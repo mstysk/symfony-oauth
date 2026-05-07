@@ -10,6 +10,7 @@ use App\OAuth\Extension\McpAccessTokenEntity;
 use App\Tests\Stub\StubClient;
 use Lcobucci\JWT\Encoding\JoseEncoder;
 use Lcobucci\JWT\Token\Parser;
+use Lcobucci\JWT\UnencryptedToken;
 use League\OAuth2\Server\CryptKey;
 use PHPUnit\Framework\TestCase;
 
@@ -36,6 +37,7 @@ final class McpAccessTokenEntityTest extends TestCase
         $jwt = $token->toString();
 
         $parsed = (new Parser(new JoseEncoder()))->parse($jwt);
+        self::assertInstanceOf(UnencryptedToken::class, $parsed);
 
         self::assertSame('jti-1', $parsed->claims()->get('jti'));
         self::assertSame('http://localhost:8000', $parsed->claims()->get('iss'));

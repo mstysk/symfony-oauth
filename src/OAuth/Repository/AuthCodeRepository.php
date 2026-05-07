@@ -15,7 +15,7 @@ final class AuthCodeRepository implements AuthCodeRepositoryInterface
     {
     }
 
-    public function getNewAuthCode(): AuthCodeEntityInterface
+    public function getNewAuthCode(): AuthCode
     {
         return new AuthCode();
     }

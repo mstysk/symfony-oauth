@@ -12,7 +12,6 @@ use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\Security\Core\User\InMemoryUserProvider;
 use Symfony\Component\Uid\Uuid;
-use Symfony\Contracts\Cache\CacheInterface;
 
 final class ConsentControllerTest extends WebTestCase
 {
@@ -33,7 +32,6 @@ final class ConsentControllerTest extends WebTestCase
         }
 
         $cache = self::getContainer()->get('cache.app');
-        \assert($cache instanceof CacheInterface);
         $cache->clear();
 
         $this->clientId = $this->seedClient();
