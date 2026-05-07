@@ -36,12 +36,15 @@ final class BearerJwtAuthenticator extends AbstractAuthenticator implements Auth
 
     public function supports(Request $request): bool
     {
-        return str_starts_with((string) $request->headers->get('Authorization', ''), 'Bearer ');
+        // RFC 7235 §2.1: auth-scheme is case-insensitive.
+        return stripos((string) $request->headers->get('Authorization', ''), 'bearer ') === 0;
     }
 
     public function authenticate(Request $request): Passport
     {
         $auth = (string) $request->headers->get('Authorization', '');
+        // The scheme keyword is always 7 chars ('Bearer '/'bearer '/'BEARER '),
+        // so the slice is independent of the casing supports() accepted.
         $rawJwt = substr($auth, 7);
 
         try {

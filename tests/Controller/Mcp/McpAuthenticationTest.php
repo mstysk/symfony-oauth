@@ -175,6 +175,28 @@ final class McpAuthenticationTest extends WebTestCase
         self::assertSame('echo', $body['result']['tools'][0]['name']);
     }
 
+    public function test_request_with_lowercase_bearer_scheme_is_accepted(): void
+    {
+        // RFC 7235 §2.1: auth-scheme is case-insensitive.
+        $this->seedAccessToken('jti-lower');
+        $jwt = $this->mintJwt(jti: 'jti-lower');
+
+        $this->client->request(
+            method: 'POST',
+            uri: '/mcp',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_AUTHORIZATION' => 'bearer ' . $jwt,
+            ],
+            content: json_encode(
+                ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list'],
+                \JSON_THROW_ON_ERROR,
+            ),
+        );
+
+        self::assertResponseIsSuccessful();
+    }
+
     public function test_tools_call_echo_returns_message_in_content(): void
     {
         $this->seedAccessToken('jti-call');
