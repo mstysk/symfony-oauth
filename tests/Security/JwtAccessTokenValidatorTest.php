@@ -52,9 +52,9 @@ final class JwtAccessTokenValidatorTest extends TestCase
     public function test_jwt_with_tampered_signature_is_rejected(): void
     {
         $jwt = $this->mintToken();
-        // Flip the last byte of the signature segment.
+        // Replace the signature segment with random bytes of the same length.
         $segments = explode('.', $jwt);
-        $segments[2] = strtr(substr($segments[2], 0, -1) . 'A', '+/', '-_');
+        $segments[2] = rtrim(strtr(base64_encode(random_bytes(256)), '+/', '-_'), '=');
         $tampered = implode('.', $segments);
 
         try {
