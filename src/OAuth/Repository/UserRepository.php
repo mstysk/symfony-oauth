@@ -10,10 +10,12 @@ use League\OAuth2\Server\Entities\UserEntityInterface;
 use League\OAuth2\Server\Repositories\UserRepositoryInterface;
 use Symfony\Component\Security\Core\Exception\UserNotFoundException;
 use Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface;
+use Symfony\Component\Security\Core\User\UserInterface;
 use Symfony\Component\Security\Core\User\UserProviderInterface;
 
 final class UserRepository implements UserRepositoryInterface
 {
+    /** @param UserProviderInterface<UserInterface> $provider */
     public function __construct(private readonly UserProviderInterface $provider)
     {
     }
